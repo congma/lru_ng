@@ -1,0 +1,11 @@
+Synopsis
+========
+
+``lru_ng`` provides a Python type for fixed-size, ``dict`` like mapping object
+``lru_ng.LRUDict`` that performes cache replacement in the least-recently used
+(LRU) order.
+
+This is a fork of the orignal module ``lru``
+<https://github.com/amitdev/lru-dict>. The new iteration of the module is
+intended for better thread-safety, more robust performance, and greater
+compatibility with Python 3.

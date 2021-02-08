@@ -1,0 +1,16 @@
+- Amit Dev
+  Author of the original "lru-dict" package (Python module name "lru")
+  https://github.com/amitdev/lru-dict
+
+- Contributors according to the public commit history of "lru-dict" in
+  alphabetical order
+  - Joshua Arnott
+  - Guillaume Boulay
+  - Michael Henderson
+  - Milon Krejca
+  - tibboh
+  - Heqing Ya
+  (The list may be incomplete and names may be inaccurate.)
+
+- Cong Ma
+  Maintainer of the current module ("lru_ng")
