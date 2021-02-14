@@ -8,8 +8,8 @@
 
 
 #if ((PY_MAJOR_VERSION) >= 3 && (PY_MINOR_VERSION >= 8))
-#ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
-#undef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
+#ifndef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
+#define LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
 #endif
 static PyStructSequence_Field LRUDict_stats_fields[] = {
     {"hits", PyDoc_STR("Number of hits"),},
@@ -28,10 +28,10 @@ static PyStructSequence_Desc LRUDict_stats_desc = {
 
 static PyTypeObject *LRUDictStatsType;
 #else	/* version check */
-#ifndef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
-#define LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
+#ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
+#undef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
 #endif
-#endif
+#endif	/* version check */
 
 
 #endif /* LRUDICT_STATSTYPE_H */
