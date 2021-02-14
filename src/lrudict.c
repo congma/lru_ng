@@ -576,12 +576,7 @@ lru_ass_sub_impl(LRUDict *self, PyObject *key, PyObject *value)
 	node_ref = (Node *)_PyDict_GetItem_KnownHash(self->dict, key, kh);
 	if (node_ref == NULL) {
 	    if (!PyErr_Occurred()) {
-		PyObject *k_repr = PyObject_Repr(key);
-		if (k_repr) {
-		    PyErr_SetObject(PyExc_KeyError, k_repr);
-		} else {
-		    PyErr_SetString(PyExc_KeyError, "<unknown key>");
-		}
+		_PyErr_SetKeyError(key);
 	    }
 	    return -1;
 	}
