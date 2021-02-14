@@ -192,12 +192,13 @@ lru_delete_last_impl(LRUDict *self)
 
     /* Transfer the node to staging. */
     Py_INCREF(n);
-    _PyDict_DelItem_KnownHash(self->dict, n->key, n->key_hash);
-    lru_remove_node_impl(self, n);
-    if (self->callback) {
-	/* The list will increase the refcount to the node if successful */
-	if (PyList_Append(self->staging_list, (PyObject *)n) != -1) {
-	    self->should_purge = 1;
+    if (_PyDict_DelItem_KnownHash(self->dict, n->key, n->key_hash) == 0) {
+	lru_remove_node_impl(self, n);
+	if (self->callback) {
+	    /* The list will increase the refcount to the node if successful */
+	    if (PyList_Append(self->staging_list, (PyObject *)n) != -1) {
+		self->should_purge = 1;
+	    }
 	}
     }
     Py_DECREF(n);
@@ -580,8 +581,12 @@ lru_ass_sub_impl(LRUDict *self, PyObject *key, PyObject *value)
 	    }
 	    return -1;
 	}
-	lru_remove_node_impl(self, node_ref);
+	Py_INCREF(node_ref);
 	res = _PyDict_DelItem_KnownHash(self->dict, key, kh);
+	if (res == 0) {
+	    lru_remove_node_impl(self, node_ref);
+	}
+	Py_DECREF(node_ref);
 	return res;
     }
 
@@ -935,8 +940,16 @@ LRU_popitem(LRUDict *self, PyObject *args)
 	LRU_LEAVE_CRIT(self);
 	return NULL;
     }
-    lru_remove_node_impl(self, node);
-    _PyDict_DelItem_KnownHash(self->dict, node->key, node->key_hash);
+
+    Py_INCREF(node);
+    if (_PyDict_DelItem_KnownHash(self->dict, node->key, node->key_hash) == 0) {
+	lru_remove_node_impl(self, node);
+    } else {
+	/* Somehow fails to delete from dict, item_to_pop becomes useless */
+	Py_DECREF(item_to_pop);
+	item_to_pop = NULL;
+    }
+    Py_DECREF(node);
 
     LRU_LEAVE_CRIT(self);
 
