@@ -191,8 +191,8 @@ lru_delete_last_impl(LRUDict *self)
     }
 
     /* Transfer the node to staging. */
-    /* get new ref */
-    _PyDict_Pop_KnownHash(self->dict, n->key, n->key_hash, NULL);
+    Py_INCREF(n);
+    _PyDict_DelItem_KnownHash(self->dict, n->key, n->key_hash);
     lru_remove_node_impl(self, n);
     if (self->callback) {
 	/* The list will increase the refcount to the node if successful */
@@ -200,7 +200,6 @@ lru_delete_last_impl(LRUDict *self)
 	    self->should_purge = 1;
 	}
     }
-    /* dispose of new ref */
     Py_DECREF(n);
 }
 
@@ -574,14 +573,21 @@ lru_ass_sub_impl(LRUDict *self, PyObject *key, PyObject *value)
 
     if (value == NULL) {
 	/* deletion: remove from dict and delink. */
-	/* NOTE: This is actually ref donated to us */
-	node_ref = (Node *)_PyDict_Pop_KnownHash(self->dict, key, kh, NULL);
+	node_ref = (Node *)_PyDict_GetItem_KnownHash(self->dict, key, kh);
 	if (node_ref == NULL) {
+	    if (!PyErr_Occurred()) {
+		PyObject *k_repr = PyObject_Repr(key);
+		if (k_repr) {
+		    PyErr_SetObject(PyExc_KeyError, k_repr);
+		} else {
+		    PyErr_SetString(PyExc_KeyError, "<unknown key>");
+		}
+	    }
 	    return -1;
 	}
 	lru_remove_node_impl(self, node_ref);
-	Py_DECREF(node_ref);
-	return 0;
+	res = _PyDict_DelItem_KnownHash(self->dict, key, kh);
+	return res;
     }
 
     /* *Not* deletion: regular assignment (either inserting new key or
