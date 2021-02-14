@@ -1012,6 +1012,7 @@ LRU_peek_last_item(LRUDict *self)
 
 
 /* Hit/miss information */
+#ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
 static PyObject *
 LRU_get_stats(LRUDict *self)
 {
@@ -1037,6 +1038,14 @@ fail:
     Py_XDECREF(res);
     return NULL;
 }
+#else /* LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN */
+static PyObject *
+LRU_get_stats(LRUDict *self)
+{
+    PyObject *res = Py_BuildValue("(kk)", self->hits, self->misses);
+    return res;
+}
+#endif /* LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN */
 
 
 /* "Manual" purge once */
@@ -1399,10 +1408,12 @@ moduleinit(void)
 	return NULL;
     }
     /* Create new namedtuple for stats information */
+#ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
     LRUDictStatsType = PyStructSequence_NewType(&LRUDict_stats_desc);
     if (LRUDictStatsType == NULL) {
 	return NULL;
     }
+#endif
 
     /* Create module object */
     if ((m = PyModule_Create(&moduledef)) == NULL) {
@@ -1412,12 +1423,16 @@ moduleinit(void)
     /* Make types available to module, or fail and cleanup */
     Py_INCREF(&NodeType);
     Py_INCREF(&LRUDictType);
+#ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
     Py_INCREF(LRUDictStatsType);
+#endif
     if (PyModule_AddObject(m, "LRUDict", (PyObject *)(&LRUDictType)) < 0 ||
 	PyModule_AddObject(m, "LRUDictBusyError", LRUDictExc_BusyErr) < 0) {
 	Py_DECREF(&LRUDictType);
 	Py_DECREF(&NodeType);
-	Py_DECREF(LRUDictStatsType );
+#ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
+	Py_DECREF(LRUDictStatsType);
+#endif
 	Py_DECREF(m);
 	m = NULL;
     }
