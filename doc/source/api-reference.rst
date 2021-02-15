@@ -34,8 +34,8 @@ Exception
 
    This is typically a result of unsynchronized access in threaded code (see
    the section :ref:`thread-safety:thread safety`). In single-thread code, it
-   may arise because a key's :meth:`~object.__hash__` or :meth:`__eq__` methods 
-   cause a jump while in the middle of a method call.
+   may arise because a key's :meth:`~object.__hash__` or :meth:`~object.__eq__`
+   methods cause a jump while in the middle of a method call.
 
    This exception will not be raised if :attr:`LRUDict._detect_conflict` is set
    to :data:`False`.
@@ -95,8 +95,8 @@ Special methods for the mapping protocol
 .. py:method:: LRUDict.__getitem__(self, key, /) -> Any
 
    Access the value associated with the key. Implement the indexing syntax
-   :code:`L[key]`. On success, also increases the hits counter and increases the
-   misses counter on failure.
+   :code:`L[key]`. On success, it also increases the hits counter and increases
+   the misses counter on failure.
 
    :param hashable key: Hashable object.
    :return:             The value associated with :code:`key`.
@@ -233,11 +233,14 @@ Methods specific to :class:`LRUDict`
 
    Return a tuple of integers, *(hits, misses)*, that provides feedback on the
    :class:`LRUDict` :ref:`hit/miss information <hits-and-misses:hits and
-   misses>`. The specific type of the return value (named
-   :class:`LRUDictStats`) is a built-in "struct sequence", similar to
-   named-tuple classes created by Python :func:`collections.namedtuple`. As
-   such, it also supports accessing the fields by the attributes :code:`.hits`
-   and :code:`.misses` respectively.
+   misses>`.
+
+   .. note:: On CPython >= 3.8, The specific type of the return value (named
+             :class:`LRUDictStats`) is a built-in "struct sequence" (a subclass
+             of :class:`tuple`), similar to named-tuple classes created by
+             Python :func:`collections.namedtuple`. As such, it also supports
+             accessing the fields by the attributes :code:`.hits` and
+             :code:`.misses` respectively.
 
    .. warning:: The numerical values are stored as C :code:`unsigned long`
                 internally and may wrap around to zero if overflown.

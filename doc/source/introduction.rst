@@ -79,7 +79,11 @@ is recorded.
 
 .. code-block:: python
 
+   >>> # For Python >= 3.8
    >>> "hits: {0.hits}; misses: {0.misses}".format(cache.get_stats())
+   'hits: 0; misses: 1'
+   >>> # For Python < 3.8, use
+   >>> "hits: {}; misses: {}".format(*cache.get_stats())
    'hits: 0; misses: 1'
 
 Successful retrieval of a value by key increases the "hits" record by one:
