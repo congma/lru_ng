@@ -1,8 +1,8 @@
 <!--
 vim: spell spelllang=en
 -->
-![GitHub CI](https://github.com/congma/lru_ng/workflows/GitHub%20CI/badge.svg)
-[![Build Status](https://travis-ci.com/congma/lru_ng.svg?branch=devel)](https://travis-ci.com/congma/lru_ng)
+[![GitHub CI status](https://github.com/congma/lru_ng/workflows/GitHub%20CI/badge.svg)](https://github.com/congma/lru_ng/actions?query=workflow%3A%22GitHub+CI%22)
+[![Travis-CI.com status](https://travis-ci.com/congma/lru_ng.svg?branch=devel)](https://travis-ci.com/congma/lru_ng)
 
 
 Synopsis
