@@ -524,7 +524,8 @@ LRU_has_key_legacy(LRUDict *self, PyObject *args)
 }
 
 
-/* Mapping interface (__getitem__, __setitem__, __delitem__) */
+/* Mapping interface (__getitem__, __setitem__, __delitem__ will wrap around
+ * them) */
 static inline PyObject *
 lru_subscript_impl(LRUDict *self, PyObject *key)
 {
@@ -1102,11 +1103,19 @@ LRU__purge_queue_size_getter(LRUDict *self)
 }
 
 
-/* Array of methods */
+/* Array of methods
+ * Notice that just like Python's dict, the __contains__ and __getitem__
+ * methods are explicitly added with METH_COEXIST, which makes them faster when
+ * used directly as such. The __setitem__ and __delitem__ methods are not yet
+ * directly put into the method-def array (same with Python dict). See
+ * discussion in https://bugs.python.org/issue34396 */
 static PyMethodDef LRU_methods[] = {
     {"__contains__",
 	(PyCFunction)LRU_contains, METH_O | METH_COEXIST,
 	PyDoc_STR("__contains__(self, key, /)\n--\n\n-> Bool\nCheck if key is in the LRUDict.")},
+    {"__getitem__",
+	(PyCFunction)LRU_subscript, METH_O|  METH_COEXIST,
+	PyDoc_STR("__getitem__(self, key, /)\n--\n\nReturn the value associated with key or raise KeyError if key is not found.")},
     {"keys",
 	(PyCFunction)LRU_keys, METH_NOARGS,
 	PyDoc_STR("keys(self, /)\n--\n\n-> List\nReturn a list of the keys in MRU order.")},
