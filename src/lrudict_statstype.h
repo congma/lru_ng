@@ -12,8 +12,8 @@
 #define LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
 #endif
 static PyStructSequence_Field LRUDict_stats_fields[] = {
-    {"hits", PyDoc_STR("Number of hits"),},
-    {"misses", PyDoc_STR("Number of misses"),},
+    {"hits", PyDoc_STR("Number of hits")},
+    {"misses", PyDoc_STR("Number of misses")},
     {NULL, NULL},
 };
 
