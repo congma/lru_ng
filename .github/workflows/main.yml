@@ -11,12 +11,12 @@ on:
 
 
 jobs:
-  build-and-test-on-pythons:
-    name: Build and Test
+  build-and-test-with-pythons-on-focal:
+    name: Build and Test on Ubuntu 20
     runs-on: ubuntu-20.04
     strategy:
       matrix:
-        python-version: [3.6, 3.7, 3.8, 3.9]
+        python-version: [3.6, 3.7, 3.8, 3.9, 3.10]
 
     steps:
     - uses: actions/checkout@v2
