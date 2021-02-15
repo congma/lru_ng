@@ -16,30 +16,30 @@ jobs:
     runs-on: ubuntu-20.04
     strategy:
       matrix:
-        python-version: ["3.6", "3.7", "3.8", "3.9"]
+        python-version: [3.6, 3.7, 3.8, 3.9]
 
     steps:
     - uses: actions/checkout@v2
 
     - name: Set up Python repository (excl. 3.8)
-      if: matrix.python-version != "3.8"
+      if: matrix.python-version != 3.8
       run: |
         sudo add-apt-repository ppa:deadsnakes/ppa
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends "python${{ matrix.python-version }}-dev"
-        "python${{ matrix.python-version }}" -m pip install --upgrade pip setuptools pytest
+        sudo apt-get install -y --no-install-recommends python${{ matrix.python-version }}-dev
+        python${{ matrix.python-version }} -m pip install --upgrade pip setuptools pytest
 
     - name: Set up Python repository (3.8)
-      if: matrix.python-version == "3.8"
+      if: matrix.python-version == 3.8
       run: |
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends "python${{ matrix.python-version }}-dev"
-        "python${{ matrix.python-version }}" -m pip install --upgrade pip setuptools pytest
+        sudo apt-get install -y --no-install-recommends python${{ matrix.python-version }}-dev
+        python${{ matrix.python-version }} -m pip install --upgrade pip setuptools pytest
 
     - name: Compile and install
       run: |
-        "python${{ matrix.python-version }}" -m pip install .
+        python${{ matrix.python-version }} -m pip install .
 
     - name: Execute pytest
       run: |
-        "python${{ matrix.python-version }}" -m pytest
+        python${{ matrix.python-version }} -m pytest
