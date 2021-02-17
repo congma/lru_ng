@@ -1,8 +1,6 @@
 """Testing refcount correctness of methods on LRUDict."""
-from sys import getrefcount, exc_info
-from contextlib import AbstractContextManager
+from sys import exc_info
 from unittest import TestCase
-from typing import Sequence, List, ContextManager
 import pytest
 from trackrefcount import TrackRCFor
 from lru_ng import LRUDict
