@@ -9,5 +9,8 @@ python:
 install:
   - pip install .
 # command to run tests
+before_script:
+  - pip install -U pytest
+  - pip install git+https://github.com/congma/trackrefcount.git#egg=trackrefcount
 script:
   - pytest
