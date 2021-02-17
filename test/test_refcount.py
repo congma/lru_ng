@@ -103,18 +103,11 @@ class TestRefCount(TestCase):
             ldobj[0] = 0
         t.assertEqualRC()
 
+    @pytest.mark.filterwarnings("ignore:for testing from callback:UserWarning")
     def test_calling_callback_for_refcount_of_callback(self):
-        import sys
-        # switch the unraisablehook to one that does nothing; the default one
-        # writes to stderr and makes pytest believe this were somehow
-        # significant.
-        sys_unrh_save = sys.unraisablehook
-        def do_nothing(*args):
-            pass
-        sys.unraisablehook = do_nothing
-
+        import warnings
         def f(key, value):
-            raise ValueError((key, value))
+            warnings.warn("for testing from callback", UserWarning)
 
         ldobj = LRUDict(1, f)
         k = "some key"
@@ -124,8 +117,6 @@ class TestRefCount(TestCase):
         # of the callback.
         with TrackRCFor(f) as t:
             ldobj[0] = 0
-        # restore old unraisablehook
-        sys.unraisablehook = sys_unrh_save
         t.assertEqualRC()
 
     def test_disable_callback(self):
