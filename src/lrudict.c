@@ -67,12 +67,7 @@ node_dealloc(Node *self)
 {
     Py_DECREF(self->key);
     Py_DECREF(self->value);
-    /* Optimization hack: allow node object to go out of lifecycle with links
-     * dangling.
-    assert(self->prev == NULL);
-    assert(self->next == NULL);
-    */
-    PyObject_Del((PyObject *)self);
+    Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
 
@@ -1334,26 +1329,69 @@ LRU_init(LRUDict *self, PyObject *args, PyObject *kwds)
 }
 
 
-/* Deallocation, when the refcount to self reaches zero */
-static void
-LRU_dealloc(LRUDict *self)
+/* NOTE: Argument names should not change because the function uses Py_VISIT
+ * macro.
+ *
+ * The GC bypasses the Node object because there's no need to track a large
+ * number of small Node objects. A Node can only be created by us and it can
+ * only be found as values in self->dict or items in self->staging_list. When
+ * doing the traverse we already know where to visit, and we directly visit the
+ * Node's Python-object members (which it owns). */
+static int
+LRU_traverse(LRUDict *self, visitproc visit, void *arg)
+{
+    Node *cur = self->last;
+    while (cur) {
+	Py_VISIT(cur->value);
+	Py_VISIT(cur->key);
+	cur = cur->prev;
+    }
+    if (self->staging_list) {
+	Py_ssize_t i;
+	Py_ssize_t len = PyList_Size(self->staging_list);
+	for (i = 0; i < len; i++) {
+	    cur = (Node *)PyList_GET_ITEM(self->staging_list, i);
+	    Py_VISIT(cur->value);
+	    Py_VISIT(cur->key);
+	}
+    }
+    return 0;
+}
+
+
+/* tp_clear slot function for breaking refcount cycles. NOT to be confused with
+ * LRU_clear */
+static int
+LRU_tp_clear(LRUDict *self)
 {
     self->internal_busy = 0;
     self->purge_busy = 0;
     /* Release storage (and all nodes in it) */
     if (self->dict) {
         LRU_clear(self);  /* Will NOT call callback on any staging elems. */
-        Py_DECREF(self->dict);
+        Py_CLEAR(self->dict);
     }
     /* Dispose of reference to callback */
-    Py_XDECREF(self->callback);
-    self->callback = NULL;
+    Py_CLEAR(self->callback);
     /* Set purge flag, trigger no-callback purge (decref all list elements) */
-    self->should_purge = 1;
-    lru_purge_staging_impl(self, FORCE_PURGE);
-    /* Release purge staging list */
-    Py_XDECREF(self->staging_list);
-    PyObject_Del((PyObject *)self);
+    if (self->staging_list) {
+	self->should_purge = 1;
+	lru_purge_staging_impl(self, FORCE_PURGE);
+	/* Release purge staging list */
+	Py_CLEAR(self->staging_list);
+    }
+    return 0;
+}
+
+
+/* Deallocation, when the refcount to self reaches zero */
+static void
+LRU_dealloc(LRUDict *self)
+{
+    PyObject_GC_UnTrack((PyObject *)self);
+
+    LRU_tp_clear(self);
+    Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
 
@@ -1382,9 +1420,12 @@ static PyTypeObject LRUDictType = {
     .tp_basicsize = sizeof(LRUDict),
     .tp_dealloc = (destructor)LRU_dealloc,
     .tp_repr = (reprfunc)LRU_repr,
+    .tp_traverse = (traverseproc)LRU_traverse,
+    .tp_clear = (inquiry)LRU_tp_clear,
     .tp_as_sequence = &LRU_as_sequence,
     .tp_as_mapping = &LRU_as_mapping,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_hash = PyObject_HashNotImplemented,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_doc = lru_doc,
     .tp_methods = LRU_methods,
     .tp_getset = LRU_descriptors,
