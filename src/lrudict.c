@@ -2,6 +2,8 @@
 #include "Python.h"
 #include "lrudict_exctype.h"
 #include "lrudict_statstype.h"
+#include <stdlib.h>
+#include <stddef.h>
 
 
 /*
@@ -54,8 +56,8 @@ typedef enum {
  */
 typedef struct _Node {
     PyObject_HEAD
-    struct _Node *prev;
-    struct _Node *next;
+    struct _Node * restrict prev;
+    struct _Node * restrict next;
     PyObject *value;
     PyObject *key;
     Py_hash_t key_hash;
@@ -143,7 +145,7 @@ do {				\
 
 /* Linked-list data-structure implementations internal to LRUDict */
 static inline void
-lru_remove_node_impl(LRUDict *self, Node *node)
+lru_remove_node_impl(LRUDict *self, Node * restrict node)
 {
     if (self->first == node) {
         self->first = node->next;
@@ -163,7 +165,7 @@ lru_remove_node_impl(LRUDict *self, Node *node)
 
 
 static inline void
-lru_add_node_at_head_impl(LRUDict *self, Node *node)
+lru_add_node_at_head_impl(LRUDict *self, Node * restrict node)
 {
     node->prev = NULL;
     if (!self->first) {
@@ -185,17 +187,26 @@ lru_delete_last_impl(LRUDict *self)
         return;
     }
 
-    /* Transfer the node to staging. */
+    /* Transfer the node to staging.
+     * This transfer is not merely conditional on self->callback being set or
+     * not. Not having a callback doesn't mean we can safely DECREF the node
+     * here, because as we DECREF the last reference to the node, it's possible
+     * to trigger arbitrary code in the Node's key or value's __del__.*/
     Py_INCREF(n);
     if (_PyDict_DelItem_KnownHash(self->dict, n->key, n->key_hash) == 0) {
 	lru_remove_node_impl(self, n);
-	if (self->callback) {
-	    /* The list will increase the refcount to the node if successful */
+	/* The list will increase the refcount to the node if successful */
+	if (self->callback ||
+	    Py_REFCNT(n->key) == 1 || Py_REFCNT(n->value) == 1)
+	{
 	    if (PyList_Append(self->staging_list, (PyObject *)n) != -1) {
 		self->should_purge = 1;
 	    }
 	}
     }
+    /* This DECREF in the case when the list append isn't succesful (a rare
+     * condition) is the last resort, but in normal condition it simply mean
+     * the reference is transfered to the list. */
     Py_DECREF(n);
 }
 
@@ -557,39 +568,69 @@ LRU_subscript(LRUDict *self, PyObject *key)
 }
 
 
-static int
-lru_ass_sub_impl(LRUDict *self, PyObject *key, PyObject *value)
+static inline int
+lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh,
+                 Node ** restrict node_ref)
 {
-    int res;
-    Node *node_ref;
-    Py_hash_t kh;
+    /* Pop node by key and key hash kh. Return error status.
+     *
+     * In the case of success (return value != -1), the output parameter
+     * node_ref is pointer to the popped node. The popped node is detached from
+     * the queue, and its prev/next pointers are invalid. The popped node is a
+     * borrowed reference and can now be unboxed.
+     *
+     * In the case of failure, (return value == -1), the output parameter is
+     * unusable, the queue is not modified, and the exception is set. */
 
-    if (key == NULL || (kh = PyObject_Hash(key)) == -1) {
+    /* identify the node to pop by borrowing a ref by key-keyhash. if not, set
+     * exception. */
+    int res;
+    *node_ref = (Node *)_PyDict_GetItem_KnownHash(self->dict, key, kh);
+    if (*node_ref == NULL) {
+	if (!PyErr_Occurred()) {
+	    _PyErr_SetKeyError(key);
+	}
 	return -1;
     }
-
-    if (value == NULL) {
-	/* deletion: remove from dict and delink. */
-	node_ref = (Node *)_PyDict_GetItem_KnownHash(self->dict, key, kh);
-	if (node_ref == NULL) {
-	    if (!PyErr_Occurred()) {
-		_PyErr_SetKeyError(key);
-	    }
-	    return -1;
-	}
-	Py_INCREF(node_ref);
-	res = _PyDict_DelItem_KnownHash(self->dict, key, kh);
-	if (res == 0) {
-	    lru_remove_node_impl(self, node_ref);
-	}
-	Py_DECREF(node_ref);
-	return res;
+    Py_INCREF(*node_ref);
+    res = _PyDict_DelItem_KnownHash(self->dict, key, kh);
+    if (res == 0) {
+	/* If dict item-deletion succeed, detach from queue and keep this ref
+	 * for the output parameter. */
+	lru_remove_node_impl(self, *node_ref);
+    } else {
+	/* If dict item-deletion fail, rewind the INCREF so there's no net
+	 * refcount change to node_ref. Exception is already set. */
+	Py_DECREF(*node_ref);
     }
+    return res;
+}
 
-    /* *Not* deletion: regular assignment (either inserting new key or
-     * replacement) */
+
+static inline int
+lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
+              PyObject **oldvalue_ref)
+{
+    /* Push key-value pair. Return error status.
+     * If the error status != -1:
+     *
+     *  In the case of inserting new key, a new node is created, inserted, and
+     *  pushed to the queue head. The output parameter oldvalue_ref is NULL.
+     *
+     *  In the case of replacing the value of old key, the node's ->value
+     *  member is replaced and written to the output parameter oldvalue_ref (a
+     *  borrowed ref, meaning that it's refcount is unchanged)
+     *
+     * If th error status == -1:
+     *
+     *  The exception is set. The output parameter is ununsable. */
+
+    int res;
+    Node *node_ref;
+
     /* Try borrowing a ref from dict */
     node_ref = (Node *)_PyDict_GetItem_KnownHash(self->dict, key, kh);
+
     if (node_ref == NULL) {
 	if (PyErr_Occurred()) {
 	    return -1;
@@ -600,23 +641,29 @@ lru_ass_sub_impl(LRUDict *self, PyObject *key, PyObject *value)
 	if (val_node == NULL) {
 	    return -1;
 	}
-	/* populate new node */
+	/* populate new node; this INCREF the key and value. */
 	NODE_INIT(val_node, key, value, kh);
 	res = _PyDict_SetItem_KnownHash(self->dict,
 		key, (PyObject *)val_node, kh);
 	if (res == 0) {
 	    lru_add_node_at_head_impl(self, val_node);
+	    *oldvalue_ref = NULL;
 	}
 	if (lru_length_impl(self) > self->size) {
 	    lru_delete_last_impl(self);
 	}
-	/* no matter SetItem succeed or not, our ref is now useless */
+	/* No matter the dict SetItem succeed or not, our ref is now useless.
+	 * Notice that the DECREF will not trigger deallocation of key or
+	 * value: it will only restore their refcounts to the state before this
+	 * function call. */
 	Py_DECREF(val_node);
     } else {
 	/* replacing old value of key -- no need to create new node, just
-	 * do the switcheroo for the value pointer */
+	 * do the switcheroo for the node's ->value pointer. The former value
+	 * is NOT DECREF'ed: it's refcount stays the same and it is now written
+	 * to the output parameter oldvalue_ref. */
 	Py_INCREF(value);
-	Py_DECREF(node_ref->value);
+	*oldvalue_ref = node_ref->value;
 	node_ref->value = value;
 	/* Promote node to head */
 	lru_remove_node_impl(self, node_ref);
@@ -631,14 +678,40 @@ static int
 LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
 {
     int res;
+    Py_hash_t kh;
+
+    if ((kh = PyObject_Hash(key)) == -1) {
+	return -1;
+    }
 
     /* Assignment (write) method, must protect */
-    LRU_ENTER_CRIT(self, -1);
-    res = lru_ass_sub_impl(self, key, value);
-    LRU_LEAVE_CRIT(self);
-    lru_purge_staging_impl(self, NO_FORCE_PURGE);
+    if (value == NULL) {
+	/* deletion */
+	Node *popped_node;
 
-    return res;
+	LRU_ENTER_CRIT(self, -1);
+	res = lru_popnode_impl(self, key, kh, &popped_node);
+	LRU_LEAVE_CRIT(self);
+	if (res == 0) {
+	    Py_DECREF(popped_node);
+	}
+	return res;
+    } else {
+	/* insertion or replacement */
+	PyObject *old_value;
+
+	LRU_ENTER_CRIT(self, -1);
+	res = lru_push_impl(self, key, value, kh, &old_value);
+	LRU_LEAVE_CRIT(self);
+	if (res == 0) {
+	    if (old_value != NULL) {
+		Py_DECREF(old_value);
+	    } else {
+		lru_purge_staging_impl(self, NO_FORCE_PURGE);
+	    }
+	}
+	return res;
+    }
 }
 
 
@@ -770,39 +843,142 @@ LRU_get(LRUDict *self, PyObject *args)
 }
 
 
+static inline int
+lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t * restrict pos,
+                       PyObject ** restrict buf, ptrdiff_t len,
+		       ptrdiff_t * restrict end)
+{
+    /* Fill a buffer of old values as the src dict is iterated over.
+     * Return value:
+     * 1: source not exhausted
+     * 0: source exhausted
+     * -1: error occurred */
+    PyObject *key;
+    PyObject *value;
+    Py_hash_t kh;
+    ptrdiff_t i;
+    int ret_status;
+
+    i = 0;
+    ret_status = 1;
+    while (i < len) {
+	int push_status;
+
+	PyObject ** restrict cur = buf + i;
+
+	if (PyDict_Next(src, pos, &key, &value)) {
+	    if ((kh = PyObject_Hash(key)) == -1) {
+		ret_status = -1;
+		break;
+	    }
+	    push_status = lru_push_impl(self, key, value, kh, cur);
+	    if (push_status != 0) {
+		ret_status = -1;
+		break;
+	    }
+	    if ((*cur) != NULL) {
+		i++;
+	    }
+	} else {
+	    ret_status = 0;
+	    break;
+	}
+    }
+    *end = i;
+    return ret_status;
+}
+
+
+static inline _Bool
+lru_update_with(LRUDict *self, PyObject *other, PyObject ** restrict buf,
+	        ptrdiff_t n)
+{
+    /* Update self with other in batches of n at most.
+     * Each batch pass into the critical section leaves the buf filled with
+     * batch_end old non-NULL values that are DECREF'ed outside the critical
+     * section in one sweep. This goes on until other is exhausted, or a
+     * failure.
+     * Return value: whether the return is caused by a failure. */
+    Py_ssize_t pos = 0;
+    ptrdiff_t batch_end = 0;
+    _Bool fail = 0;
+    _Bool leave = 0;
+
+    do {
+	int status;
+
+	if (self->detect_conflict && self->internal_busy) {
+	    PyErr_SetString(LRUDictExc_BusyErr,
+		    "attempted entry into LRUDict critical section while busy");
+	    fail = 1;
+	    break;
+	}
+
+	self->internal_busy = 1;
+
+	status = lru_update_fill_buffer(self, other, &pos, buf, n, &batch_end);
+
+	if (status == -1) {
+	    fail = 1;
+	    leave = 1;
+	} else if (status == 0) {
+	    leave = 1;
+	}
+
+	self->internal_busy = 0;
+	for (ptrdiff_t j = 0; j < batch_end; j++) {
+	    Py_DECREF(buf[j]);
+	}
+    } while (!leave);
+
+    return fail;
+}
+
+
+#define LRU_BATCH_MAX	128
 static PyObject *
 LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
 {
-    PyObject *key, *value;
+    PyObject **buf;
+    Py_ssize_t buf_len;
     PyObject *other = NULL;
-    Py_ssize_t pos;
+    PyObject *res;
+    _Bool fail;
 
     if (!PyArg_ParseTuple(args,
-		"|O;update() takes at most one positional-only parameter",
-		&other)) {
+                          "|O;update() takes at most one positional-only"
+			  " parameter",
+			  &other))
+    {
 	return NULL;
     }
 
-    /* Assignment method, must protect */
-    LRU_ENTER_CRIT(self, NULL);
+    buf_len = LRU_BATCH_MAX >= self->size ? self->size : LRU_BATCH_MAX;
+    if ((buf = malloc((size_t)(buf_len * sizeof(PyObject *)))) == NULL) {
+	return PyErr_NoMemory();
+    }
 
     if (other != NULL && PyDict_Check(other)) {
-	pos = 0;
-	while (PyDict_Next(other, &pos, &key, &value)) {
-	    lru_ass_sub_impl(self, key, value);
+	fail = lru_update_with(self, other, buf, buf_len);
+	if (fail) {
+	    res = NULL;
+	    goto cleanup;
 	}
     }
+
     if (kwargs != NULL && PyDict_Check(kwargs)) {
-	pos = 0;
-	while (PyDict_Next(kwargs, &pos, &key, &value)) {
-	    lru_ass_sub_impl(self, key, value);
+	fail = lru_update_with(self, kwargs, buf, buf_len);
+	if (fail) {
+	    res = NULL;
+	    goto cleanup;
 	}
     }
-
-    LRU_LEAVE_CRIT(self);
+    res = Py_None;
+cleanup:
+    free(buf);
     lru_purge_staging_impl(self, NO_FORCE_PURGE);
-
-    Py_RETURN_NONE;
+    Py_XINCREF(res);
+    return res;
 }
 
 
@@ -896,19 +1072,24 @@ LRU_pop(LRUDict *self, PyObject *args)
 	self->hits++;
 	lru_remove_node_impl(self, ret_node);
 	Py_INCREF(ret_node->value);
+
 	result = ret_node->value;
+
+	LRU_LEAVE_CRIT(self);
+
 	Py_DECREF(ret_node);
     } else {	/* ret_node == NULL, i.e. key missing */
 	self->misses++;
-	if (default_obj) {	/* default_obj given */
+	if (default_obj != NULL) {	/* default_obj given */
 	    PyErr_Clear();
 	    Py_INCREF(default_obj);
 	}
+	/* Otherwise (key missing, and default_obj not given [i.e. == NULL]),
+	 * the appropriate KeyError has already been set. */
 	result = default_obj;
+
+	LRU_LEAVE_CRIT(self);
     }
-    /* Otherwise (key missing, and default_obj not given [i.e. == NULL]), the
-     * appropriate KeyError has already been set. */
-    LRU_LEAVE_CRIT(self);
 
     return result;
 }
@@ -938,16 +1119,15 @@ LRU_popitem(LRUDict *self, PyObject *args)
     }
 
     Py_INCREF(node);
-    if (_PyDict_DelItem_KnownHash(self->dict, node->key, node->key_hash) == 0) {
+    if (_PyDict_DelItem_KnownHash(self->dict, node->key, node->key_hash) == 0)
+    {
 	lru_remove_node_impl(self, node);
     } else {
 	/* Somehow fails to delete from dict, item_to_pop becomes useless */
-	Py_DECREF(item_to_pop);
-	item_to_pop = NULL;
+	Py_CLEAR(item_to_pop);
     }
-    Py_DECREF(node);
-
     LRU_LEAVE_CRIT(self);
+    Py_DECREF(node);
 
     return item_to_pop;
 }
@@ -958,17 +1138,16 @@ LRU_clear(LRUDict *self)
 {
     /* Write into almost everything in self */
     LRU_ENTER_CRIT(self, NULL);
-
-    /* Optimization hack: just let nodes go out of lifecycle by PyDict_Clear(),
-     * and let dealloc handle them. We can re-set self->first, self->last and
-     * don't have to delink one by one. */
+    /* Optimization hack: just let nodes go out of lifecycle by PyDict_Clear()
+     * (out of critical section; for fear of triggering the __del__ of objects
+     * referenced by nodes in turn), and let dealloc handle them. We can re-set
+     * self->first, self->last and don't have to delink one by one. */
     self->first = self->last = NULL;
-    PyDict_Clear(self->dict);	/* no return value (void) */
-
     self->hits = 0;
     self->misses = 0;
-
     LRU_LEAVE_CRIT(self);
+
+    PyDict_Clear(self->dict);	/* no return value (void) */
 
     Py_RETURN_NONE;
 }
