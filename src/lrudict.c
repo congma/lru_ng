@@ -3,7 +3,6 @@
 #include "lrudict_exctype.h"
 #include "lrudict_statstype.h"
 #include <stdlib.h>
-#include <stddef.h>
 
 
 /*
@@ -56,8 +55,8 @@ typedef enum {
  */
 typedef struct _Node {
     PyObject_HEAD
-    struct _Node * restrict prev;
-    struct _Node * restrict next;
+    struct _Node *restrict prev;
+    struct _Node *restrict next;
     PyObject *value;
     PyObject *key;
     Py_hash_t key_hash;
@@ -145,7 +144,7 @@ do {                            \
 
 /* Linked-list data-structure implementations internal to LRUDict */
 static inline void
-lru_remove_node_impl(LRUDict *self, Node * restrict node)
+lru_remove_node_impl(LRUDict *self, Node *restrict node)
 {
     if (self->first == node) {
         self->first = node->next;
@@ -165,7 +164,7 @@ lru_remove_node_impl(LRUDict *self, Node * restrict node)
 
 
 static inline void
-lru_add_node_at_head_impl(LRUDict *self, Node * restrict node)
+lru_add_node_at_head_impl(LRUDict *self, Node *restrict node)
 {
     node->prev = NULL;
     if (!self->first) {
@@ -591,7 +590,7 @@ LRU_subscript(LRUDict *self, PyObject *key)
  * unusable, the queue is not modified, and the exception is set. */
 static inline int
 lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh,
-                 Node ** restrict node_ref)
+                 Node **restrict node_ref)
 {
     /* identify the node to pop by borrowing a ref by key-keyhash. if not, set
      * exception. */
@@ -857,28 +856,34 @@ LRU_get(LRUDict *self, PyObject *args)
 }
 
 
-/* Fill a buffer of old values as the src dict is iterated over.
+/* Fill at most one buffer of replaced values from self->dict as the src dict
+ * is iterated over while updating self->dict.
+ *
+ * Output parameters:
+ * pos: same as in PyDict_Next, the sparse index of dict iteration.
+ * n_written: number of buffer elements written in this pass.
+ *
  * Return value:
  * 1: source not exhausted
  * 0: source exhausted
  * -1: error occurred */
 static inline int
-lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t * restrict pos,
-                       PyObject ** restrict buf, ptrdiff_t len,
-                       ptrdiff_t * restrict end)
+lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t *restrict pos,
+                       PyObject **restrict buf, size_t buf_len,
+                       size_t *restrict n_written)
 {
     PyObject *key;
     PyObject *value;
     Py_hash_t kh;
-    ptrdiff_t i;
+    size_t i;
     int ret_status;
 
     i = 0;
     ret_status = 1;
-    while (i < len) {
+    while (i < buf_len) {
         int push_status;
 
-        PyObject ** restrict cur = buf + i;
+        PyObject **restrict cur = buf + i;
 
         if (PyDict_Next(src, pos, &key, &value)) {
             if ((kh = PyObject_Hash(key)) == -1) {
@@ -891,6 +896,8 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t * restrict pos,
                 break;
             }
             if ((*cur) != NULL) {
+                /* Only advance the position in buffer if the value written
+                 * is not NULL */
                 i++;
             }
         }
@@ -899,7 +906,7 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t * restrict pos,
             break;
         }
     }
-    *end = i;
+    *n_written = i;
     return ret_status;
 }
 
@@ -910,27 +917,30 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t * restrict pos,
  * section in one sweep. This goes on until other is exhausted, or a failure.
  * Return value: whether the return is caused by a failure. */
 static inline _Bool
-lru_update_with(LRUDict *self, PyObject *other, PyObject ** restrict buf,
-                ptrdiff_t n)
+lru_update_with(LRUDict *self, PyObject *other, PyObject **restrict buf,
+                size_t buf_len)
 {
     Py_ssize_t pos = 0;
-    ptrdiff_t batch_end = 0;
+    size_t batch_up_to = 0;
     _Bool fail = 0;
     _Bool leave = 0;
 
     do {
         int status;
 
-        if (self->detect_conflict && self->internal_busy) {
+        if (self->detect_conflict && self->internal_busy)
+        {
             PyErr_SetString(LRUDictExc_BusyErr,
-                    "attempted entry into LRUDict critical section while busy");
+                            "attempted entry into LRUDict critical section"
+                            " while busy");
             fail = 1;
             break;
         }
 
         self->internal_busy = 1;
 
-        status = lru_update_fill_buffer(self, other, &pos, buf, n, &batch_end);
+        status = lru_update_fill_buffer(self, other, &pos,
+                                        buf, buf_len, &batch_up_to);
 
         if (status == -1) {
             fail = 1;
@@ -941,7 +951,9 @@ lru_update_with(LRUDict *self, PyObject *other, PyObject ** restrict buf,
         }
 
         self->internal_busy = 0;
-        for (ptrdiff_t j = 0; j < batch_end; j++) {
+
+        /* Sweep the buffer for this pass. */
+        for (size_t j = 0; j < batch_up_to; j++) {
             Py_DECREF(buf[j]);
         }
     } while (!leave);
@@ -950,12 +962,30 @@ lru_update_with(LRUDict *self, PyObject *other, PyObject ** restrict buf,
 }
 
 
+/* Like dict.update(): perform update of self.
+ * This operation cannot be both safely and efficiently done in one single pass
+ * if a) we require that all potentially __del__-triggering code be executed
+ * outside the identified critical section, and b) we are big. Instead we make
+ * multiple passes, each pass filling a buffer of replaced old values from
+ * self. After each pass and before the next one (if necessary), the buffer's
+ * contents are DECREF'ed.  The buffer doesn't have to be a large one: if we
+ * ourselves have a large capacity, a single-pass operation would have required
+ * as large a buffer, because each existing value could have been subject to
+ * replacement.
+ *
+ * XXX: Idea for improvement with memory use: the purge (eviction) list could
+ * grow as big as the difference (their_length - our_capacity). This will make
+ * eviction more time-efficent but potentially very memory-consuming. We could
+ * also purge as we leave each pass, but that won't help much because a huge
+ * source will not fill the replacement buffer as it pushes a huge amount of
+ * elements to the list.
+ */
 #define LRU_BATCH_MAX   128
 static PyObject *
 LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
 {
-    PyObject **buf;
-    Py_ssize_t buf_len;
+    PyObject **buf;  /* Buffer for replaced values from self->dict. */
+    size_t buf_len;
     PyObject *other = NULL;
     PyObject *res;
     _Bool fail;
@@ -969,7 +999,7 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     }
 
     buf_len = LRU_BATCH_MAX >= self->size ? self->size : LRU_BATCH_MAX;
-    if ((buf = malloc((size_t)(buf_len * sizeof(PyObject *)))) == NULL) {
+    if ((buf = malloc(buf_len * sizeof(PyObject *))) == NULL) {
         return PyErr_NoMemory();
     }
 
