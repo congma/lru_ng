@@ -998,6 +998,7 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
         return NULL;
     }
 
+    assert(self->size > 0);
     buf_len = LRU_BATCH_MAX >= self->size ? self->size : LRU_BATCH_MAX;
     if ((buf = malloc(buf_len * sizeof(PyObject *))) == NULL) {
         return PyErr_NoMemory();
