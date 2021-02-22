@@ -73,7 +73,7 @@ class TestRefCycle(TestCase):
         r[1] = 0
         del r
 
-    @yagot.garbage_checked()
+    @yagot.garbage_checked(leaks_only=True)
     def test_link_callback(self):
         class CB:
             def __init__(self, other=None):
