@@ -338,7 +338,7 @@ LRU_size_getter(LRUDict *self, void *closure)
 
 
 static PyObject *
-LRU_get_size_legacy(LRUDict *self)
+LRU_get_size_legacy(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     return LRU_size_getter(self, NULL);
 }
@@ -763,7 +763,7 @@ get_key(Node *node)
 
 
 static PyObject *
-LRU_keys(LRUDict *self) {
+LRU_keys(LRUDict *self, PyObject *Py_UNUSED(ignored)) {
     PyObject *result;
 
     /* Only increfs the keys, not critical per se. */
@@ -781,7 +781,7 @@ get_value(Node *node)
 
 
 static PyObject *
-LRU_values(LRUDict *self)
+LRU_values(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *result;
 
@@ -804,7 +804,7 @@ get_item(Node *node)
 
 
 static PyObject *
-LRU_items(LRUDict *self)
+LRU_items(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *result;
 
@@ -1134,7 +1134,7 @@ LRU_popitem(LRUDict *self, PyObject *args)
 
 
 static PyObject *
-LRU_clear(LRUDict *self)
+LRU_clear(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     /* Write into almost everything in self */
     LRU_ENTER_CRIT(self, NULL);
@@ -1155,7 +1155,7 @@ LRU_clear(LRUDict *self)
 
 /* Methods specific to LRUDict */
 static PyObject *
-LRU_peek_first_item(LRUDict *self)
+LRU_peek_first_item(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *result;
 
@@ -1175,7 +1175,7 @@ LRU_peek_first_item(LRUDict *self)
 
 
 static PyObject *
-LRU_peek_last_item(LRUDict *self)
+LRU_peek_last_item(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *result;
 
@@ -1197,7 +1197,7 @@ LRU_peek_last_item(LRUDict *self)
 /* Hit/miss information */
 #ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
 static PyObject *
-LRU_get_stats(LRUDict *self)
+LRU_get_stats(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *n;
     PyObject *res = PyStructSequence_New(LRUDictStatsType);
@@ -1223,7 +1223,7 @@ fail:
 }
 #else /* LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN */
 static PyObject *
-LRU_get_stats(LRUDict *self)
+LRU_get_stats(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *res = Py_BuildValue("(kk)", self->hits, self->misses);
     return res;
@@ -1233,7 +1233,7 @@ LRU_get_stats(LRUDict *self)
 
 /* "Manual" purge once */
 static PyObject *
-LRU_purge(LRUDict *self)
+LRU_purge(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     self->should_purge = 1;
     return PyLong_FromSsize_t(lru_purge_staging_impl(self, FORCE_PURGE));
@@ -1267,9 +1267,10 @@ MAP_BITFIELD(detect_conflict, _detect_conflict)
 
 
 static PyObject *
-LRU__purge_queue_size_getter(LRUDict *self)
+LRU__purge_queue_size_getter(LRUDict *self, void *closure)
 {
     Py_ssize_t len = 0;
+    (void)closure;
     if (self->staging_list) {
 	len = PyList_Size(self->staging_list);
     }
@@ -1333,7 +1334,7 @@ static PyMethodDef LRU_methods[] = {
 	(PyCFunction)LRU_peek_last_item, METH_NOARGS,
 	PyDoc_STR("peek_last_item(self, /)\n--\n\n-> Tuple[Object, Object]\nReturn the LRU item as tuple (key, value) without changing the key order.")},
     {"update",
-	(PyCFunction)LRU_update, METH_VARARGS | METH_KEYWORDS,
+	(PyCFunction)(void(*)(void))LRU_update, METH_VARARGS | METH_KEYWORDS,
 	PyDoc_STR("update(self, other={}, /, **kwargs)\n--\n\n-> None\nUpdate the LRUDict using the key-value pairs from the dictionary \"other\" and the optional keyword arguments.\nThe update is performed in the iteration order of other, and after that, the kwargs order as specified. This process may cause eviction from the LRUDict.")},
     {"set_callback",
 	(PyCFunction)LRU_set_callback_legacy, METH_VARARGS,
@@ -1547,7 +1548,8 @@ LRU_tp_clear(LRUDict *self)
     self->purge_busy = 0;
     /* Release storage (and all nodes in it) */
     if (self->dict) {
-        LRU_clear(self);  /* Will NOT call callback on any staging elems. */
+	/* Will NOT call callback on any staging elems. */
+        LRU_clear(self, NULL);
         Py_CLEAR(self->dict);
     }
     /* Dispose of reference to callback */
