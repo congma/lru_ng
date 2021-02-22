@@ -1535,6 +1535,9 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 	    Py_VISIT(cur->key);
 	}
     }
+    if (self->callback) {
+	Py_VISIT(self->callback);
+    }
     return 0;
 }
 
