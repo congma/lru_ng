@@ -116,10 +116,10 @@ typedef struct {
     unsigned long hits;
     unsigned long misses;
     _Bool internal_busy:1;
-    _Bool should_purge:1;
+    _Bool detect_conflict:1;
+    _Bool should_purge;
     _Bool purge_busy:1;
     _Bool purge_suspended:1;
-    _Bool detect_conflict:1;
 } LRUDict;
 
 
