@@ -250,9 +250,10 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
         self->purge_busy = 1;
         self->should_purge = 0;
         len = PyList_Size(self->staging_list);
-        if (PySequence_DelSlice(self->staging_list, 0, len) == -1) {
+        if (PyList_SetSlice(self->staging_list, 0, len, NULL) == -1) {
             PyErr_WriteUnraisable((PyObject *)self);
             PyErr_Clear();
+            len -= PyList_Size(self->staging_list);
         }
         self->purge_busy = 0;
         return len;
@@ -305,12 +306,15 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
         /* dispose of new reference to list item */
         Py_XDECREF(args);
     }   /* end of loop over list items */
-    if (PySequence_DelSlice(self->staging_list, 0, len) == -1) {
+
+    if (PyList_SetSlice(self->staging_list, 0, len, NULL) == -1) {
         if (PyErr_Occurred()) {
             PyErr_WriteUnraisable((PyObject *)self);
             PyErr_Clear();
+            len -= PyList_Size(self->staging_list);
         }
     }
+
     Py_DECREF(cb_tmp);
     self->purge_busy = 0;
     return len;
