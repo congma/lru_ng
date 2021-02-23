@@ -1583,9 +1583,13 @@ LRU_init(LRUDict *self, PyObject *args, PyObject *kwds)
  *
  * The GC bypasses the Node object because there's no need to track a large
  * number of small Node objects. A Node can only be created by us and it can
- * only be found as values in self->dict or items in self->staging_list. When
- * doing the traverse we already know where to visit, and we directly visit the
- * Node's Python-object members (which it owns). */
+ * only be found as values in self->dict or items in self->staging_list, and it
+ * cannot be shared by different dicts. When doing the traverse we already know
+ * where to visit, and we directly visit the Node's Python-object members
+ * (which it owns). The visitations honour breadth-first traversal partially,
+ * by first visiting node values (most likely place to form cycles), then
+ * staging_list (usually short), followed by node keys, and finally the
+ * callback object. */
 static int
 LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 {
@@ -1593,18 +1597,22 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 
     while (cur) {
         Py_VISIT(cur->value);
-        Py_VISIT(cur->key);
         cur = cur->prev;
     }
 
     if (self->staging_list) {
-        Py_ssize_t i;
         Py_ssize_t len = PyList_Size(self->staging_list);
-        for (i = 0; i < len; i++) {
+        for (Py_ssize_t i = 0; i < len; i++) {
             cur = (Node *)PyList_GET_ITEM(self->staging_list, i);
             Py_VISIT(cur->value);
             Py_VISIT(cur->key);
         }
+    }
+
+    cur = self->last;
+    while (cur) {
+        Py_VISIT(cur->key);
+        cur = cur->prev;
     }
 
     if (self->callback) {
