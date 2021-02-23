@@ -174,6 +174,33 @@ lru_add_node_at_head_impl(LRUDict *self, Node *restrict node)
 }
 
 
+/* There's no way to compute whether an object is "DECREF-safe". We try to give
+ * an conservative estimate: Objects not subject to imminent deallocation are
+ * "safe", as are some built-in, atom-like objects. This allows us to bypass
+ * the push-to-staging and (X)DECREF them. */
+static inline _Bool
+lru_decref_unsafe(const PyObject * restrict obj)
+{
+    if (obj == NULL) {
+        return 0;
+    }
+
+    if (Py_REFCNT(obj) > 1) {
+        return 0;
+    }
+
+    if (PyUnicode_CheckExact(obj) || PyLong_CheckExact(obj) ||
+        obj == Py_None || PyBool_Check(obj) || PyFloat_CheckExact(obj) ||
+        PyComplex_CheckExact(obj) || PyBytes_CheckExact(obj) ||
+        PyByteArray_CheckExact(obj))
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+
 static inline void
 lru_delete_last_impl(LRUDict *self)
 {
@@ -192,7 +219,7 @@ lru_delete_last_impl(LRUDict *self)
         lru_remove_node_impl(self, n);
         /* The list will increase the refcount to the node if successful */
         if (self->callback ||
-            Py_REFCNT(n->key) == 1 || Py_REFCNT(n->value) == 1)
+            lru_decref_unsafe(n->value) || lru_decref_unsafe(n->key))
         {
             if (PyList_Append(self->staging_list, (PyObject *)n) != -1) {
                 self->should_purge = 1;
