@@ -196,14 +196,23 @@ Methods emulating :class:`dict`
    .. note:: The optional argument :code:`least_recent` is specific to
              :class:`LRUDict` and not present for :class:`dict`.
 
-.. py:method:: LRUDict.update(self, other={}, /, *, **kwargs) -> None
+.. py:method:: LRUDict.update(self[, other,] /, *, **kwargs) -> None
 
    Update self with the key-value pairs from :code:`other`, a Python
    :class:`dict`, if the argument is present.  If keyword arguments are also
    given, further update self using them. This method may cause eviction if the
    update would have grown the length of self beyond the size limit. The update
-   is performed in the iteration order of :code:`other`, and then the order of
-   keyword arguments as they are given in the method call if any.
+   is performed in the iteration order of :code:`other` (which is the same as
+   key-insertion order), and then the order of keyword arguments as they are
+   specified in the method call if any.
+
+   .. warning:: This method may make multiples passes into the critical section
+                in order to consume the sources, and while :code:`self` is
+                being updated the intermediate list of evicted items may grow
+                (bound by the diffrence of source size and self size). It is
+                preferrable to not having another thread modifying
+                :code:`other` or :code:`self` while :code:`self` is being
+                updated.
 
 .. py:method:: LRUDict.has_key(self, key, /) -> Bool
 
@@ -243,7 +252,8 @@ Methods specific to :class:`LRUDict`
              :code:`.misses` respectively.
 
    .. warning:: The numerical values are stored as C :code:`unsigned long`
-                internally and may wrap around to zero if overflown.
+                internally and may wrap around to zero if overflown, although
+                this unlikely.
 
 
 Other special methods
@@ -272,7 +282,7 @@ Less-common and experimental methods
    :ref:`introduction:caveats with callbacks`, the purge will ignore the return
    value of the callback and suppress exceptions raised in there.
 
-   :return: Number of items purged.
+   :return: Number of items purged, or -1 in the case of error.
 
 .. py:method:: LRUDict._suspend_purge
    :property:

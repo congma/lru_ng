@@ -26,6 +26,10 @@ by the following :code:`import` statement in Python code:
 Differences from :code:`lru.LRU` are described in the
 :ref:`compatibility:compatibility` section.
 
+The code is optimized for fast insertion, deletion, and eviction. The extension
+class participates in Python's cycle garbage collection.
+
+
 .. toctree::
    :numbered:
    :maxdepth: 2
@@ -36,6 +40,7 @@ Differences from :code:`lru.LRU` are described in the
    hits-and-misses
    compatibility
    thread-safety
+   performance
 
 
 Indices and tables

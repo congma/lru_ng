@@ -40,7 +40,7 @@ Differences from :code:`lru.LRU` 1.1.7
 * The :meth:`~LRUDict.peek_first_item` and :meth:`~LRUDict.peek_last_item`
   methods raise :exc:`KeyError` for empty :class:`~LRUDict`, rather than return
   :data:`None`.
-* The :meth:`~LRUDict.popitem()` method by default pops in the order *from the
+* The :meth:`~LRUDict.popitem` method by default pops in the order *from the
   most recent to the least recent*. This is the inverse of the old default
   behaviour.
 * The string returned by :func:`repr` can now be distinguished from that of a
@@ -51,14 +51,20 @@ behaviours in more subtle ways.
 
 .. _difflru:
 
-* The methods that takes a key parameter evaluate the hash only once, like the
-  Python :class:`dict`. This results in a performance gain.
+* The methods that takes a "key" parameter evaluate the hash only once, like
+  the Python :class:`dict`. This results in a performance gain.
+* Python :term:`garbage collection` (reclaiming objects forming reference
+  cycles that are otherwise unreachable) is supported (see also
+  :ref:`performance:memory usage`).
+* The :class:`LRUDict` instance is unhashable.
 * The callback is now executed outside the critical section of the code (where
   internal changes to the data structures are taking place). Newly evicted
   items are buffered, and a :meth:`~LRUDict.purge` method can optionally ensure
   that the buffer is cleared, although the code takes care of purging normally.
   This change reduces the likelihood that a misbehaving callback may crash the
   Python process.
+* Similarly, the :meth:`~object.__del__` of the key or value cannot be normally
+  triggered inside the critical section.
 * The callback's exception is suppressed (more details in
   :ref:`introduction:caveats with callbacks`).
 * Assuming the protection of the :term:`global interpreter lock`, the methods

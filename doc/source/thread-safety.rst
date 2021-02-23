@@ -20,12 +20,12 @@ sequentialized as a result of the GIL's functioning. When a thread is using a
 method, it can be certain that no other thread is modifying the data at the
 same time.
 
-However, there are three places where the protection is not perfect. These are
-the :ref:`callback <introduction:using a callback>` and the key's
+However, there are four places where the protection is not perfect. These are
+the :ref:`callback <introduction:using a callback>`, the key's
 :meth:`~object.__hash__`/:meth:`~object.__eq__` methods (used by the internal
-:class:`dict`). In the notes on :ref:`compatibility <difflru>` we have
-described the precaution about these code paths that can in principle do
-anything.
+:class:`dict`), and the :meth:`~object.__del__` method on the key or value. In
+the notes on :ref:`compatibility <difflru>` we have described the precaution
+about these code paths that can in principle do anything.
 
 Here, we should mention the qualities of these callable objects that makes the
 programme overall safer. We will refer to them as "external code".
@@ -52,8 +52,9 @@ Second, avoid unwanted side effects in the external code. Modifying the
 :class:`LRUDict` object itself is one such effect. Again, this can be detected
 at runtime, but it is not preferable to rely on this.
 
-Overall, callbacks are mostly safe. However, the timing and order of the
-callback execution cannot be guaranteed in general in a threaded environment.
+Overall, callbacks and :meth:`~object.__del__` are mostly safe. However, the
+timing and order of the callback execution cannot be guaranteed in general in a
+threaded environment.
 
 
 Summary
@@ -65,9 +66,9 @@ Summary
       do not drop the GIL or modify the :class:`LRUDict`, usage in a
       threaded environment is generally safe.
 
-   2. The callback is generally safe, but it is not preferable to modify the
-      :class:`LRUDict` in there or clog up the purge queue by taking long
-      computations.
+   2. The callback and the :meth:`~object.__del__` method of keys or values are
+      generally safe, but it is not preferable to modify the :class:`LRUDict`
+      in there or clog up the purge queue by taking long computations.
 
    3. Limited ability to detect contention at runtime is provided (see
       :exc:`LRUDictBusyError`), and the user can implement their own
