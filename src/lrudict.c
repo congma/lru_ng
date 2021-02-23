@@ -37,11 +37,6 @@
  */
 
 
-#define GET_NODE(d, key) ((Node *)(Py_TYPE((d))->tp_as_mapping->mp_subscript((d), (key))))
-#define PUT_NODE(d, key, node) (Py_TYPE((d))->tp_as_mapping->mp_ass_subscript((d), (key), ((PyObject *)node)))
-
-
-
 /* Programming support for manual/forced purging control */
 typedef enum {
     NO_FORCE_PURGE = 0,
@@ -549,8 +544,8 @@ LRU_has_key_legacy(LRUDict *self, PyObject *args)
 static inline PyObject *
 lru_subscript_impl(LRUDict *self, PyObject *key)
 {
-    Node *node = GET_NODE(self->dict, key);
-    if (!node) {
+    Node *node = (Node *)PyDict_GetItemWithError(self->dict, key);
+    if (node == NULL) {
         self->misses++;
         return NULL;
     }
@@ -563,7 +558,6 @@ lru_subscript_impl(LRUDict *self, PyObject *key)
 
     self->hits++;
     Py_INCREF(node->value);
-    Py_DECREF(node);
     return node->value;
 }
 
@@ -578,6 +572,11 @@ LRU_subscript(LRUDict *self, PyObject *key)
     result = lru_subscript_impl(self, key);
     LRU_LEAVE_CRIT(self);
 
+    if (result == NULL) {
+        if (!PyErr_Occurred()) {
+            _PyErr_SetKeyError(key);
+        }
+    }
     return result;
 }
 
@@ -847,11 +846,9 @@ LRU_get(LRUDict *self, PyObject *args)
     result = lru_subscript_impl(self, key);
     LRU_LEAVE_CRIT(self);
 
-    if (result) {
+    if (PyErr_Occurred() || result != NULL) {
         return result;
     }
-
-    PyErr_Clear();  /* GET_NODE sets an exception on miss. Shut it up. */
 
     assert(default_obj != NULL);
     Py_INCREF(default_obj);
