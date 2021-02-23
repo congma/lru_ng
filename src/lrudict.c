@@ -211,26 +211,29 @@ lru_delete_last_impl(LRUDict *self)
 }
 
 
-    /* Purging mechanism.
-     *
-     * NOTE: This is _the_ place where callback gets called. The function is
-     * intended to be always called _outside_ the LRUDict-critical section. The
-     * reason is that we cannot guarantee the callback function, which can do
-     * anything, will play nice with the LRUDict object itself. If the callback
-     * were executed within the critical section where/while the object
-     * internal data is not consistent, the inconsistency can be left exposed.
-     *
-     * The staging area is just a Python list, and if a callback is set, it is
-     * called along the list in ascending index order. Then the list elements
-     * are wiped.
-     *
-     * The function must be called while the GIL is held. This is normally
-     * true, but the callback may execute a code path that release the GIL. For
-     * this reason a busy bit, self->purge_busy, is checked. While this bit is
-     * set, another call into the section immediately returns (balks). The list
-     * may grow during the callback action, and the recently appended items
-     * will be purged later.
-     */
+/* Purging mechanism.
+ *
+ * NOTE: This is _the_ place where callback gets called. The function is
+ * intended to be always called _outside_ the LRUDict-critical section. The
+ * reason is that we cannot guarantee the callback function, which can do
+ * anything, will play nice with the LRUDict object itself. If the callback
+ * were executed within the critical section where/while the object internal
+ * data is not consistent, the inconsistency can be left exposed.
+ *
+ * The staging area is just a Python list, and if a callback is set, it is
+ * called along the list in ascending index order. Then the list elements are
+ * wiped.
+ *
+ * The function must be called while the GIL is held. This is normally true,
+ * but the callback may execute a code path that release the GIL. For this
+ * reason a busy bit, self->purge_busy, is checked. While this bit is set,
+ * another call into the section immediately returns (balks). The list may grow
+ * during the callback action, and the recently appended items will be purged
+ * later.
+ *
+ * Return value: an estimate of the number of elements purged, or -1 in the
+ * case that such estsimate cannot be made because of internal error.
+ */
 static Py_ssize_t
 lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
 {
@@ -252,7 +255,7 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
         if (PyList_SetSlice(self->staging_list, 0, len, NULL) == -1) {
             PyErr_WriteUnraisable((PyObject *)self);
             PyErr_Clear();
-            len -= PyList_Size(self->staging_list);
+            len = -1;
         }
         self->purge_busy = 0;
         return len;
@@ -310,7 +313,7 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
         if (PyErr_Occurred()) {
             PyErr_WriteUnraisable((PyObject *)self);
             PyErr_Clear();
-            len -= PyList_Size(self->staging_list);
+            len = -1;
         }
     }
 
