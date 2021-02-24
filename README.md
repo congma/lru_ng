@@ -1,8 +1,9 @@
 <!--
 vim: spell spelllang=en
 -->
-[![GitHub CI status](https://github.com/congma/lru_ng/workflows/GitHub%20CI/badge.svg)](https://github.com/congma/lru_ng/actions?query=workflow%3A%22GitHub+CI%22)
+[![GitHub CI](https://github.com/congma/lru_ng/actions/workflows/main.yml/badge.svg)](https://github.com/congma/lru_ng/actions/workflows/main.yml)
 [![Travis-CI.com status](https://travis-ci.com/congma/lru_ng.svg?branch=devel)](https://travis-ci.com/congma/lru_ng)
+[![Documentation Status](https://readthedocs.org/projects/lru-ng/badge/?version=latest)](https://lru-ng.readthedocs.org/en/latest/)
 
 
 Synopsis
@@ -29,11 +30,13 @@ For more information, please consult the documentation and `pydoc lru_ng`.
 Documentation
 =============
 
-The documentation written in reStructuredText is contained in the `doc/source`
-directory. Although readable as such, you can build the HTML pages using
-[Sphinx](https://www.sphinx-doc.org/en/master/) and read them in a Web browser
-locally. The following commands install `sphinx` and supporting packages, then
-build the pages:
+Full documentation can be read online at https://lru-ng.readthedocs.org/
+
+The documentation source written in reStructuredText is contained in the
+`doc/source` directory. You can build a local copy of the HTML pages using
+[Sphinx](https://www.sphinx-doc.org/en/master/) and read them in a Web browser.
+The following commands (executed from the repository directory) shall install
+`sphinx` and supporting packages, then build the pages:
 
 ```shell
 pip install sphinx sphinx_rtd_theme
