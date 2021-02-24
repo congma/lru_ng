@@ -3,7 +3,7 @@ vim: spell spelllang=en
 -->
 [![GitHub CI](https://github.com/congma/lru_ng/actions/workflows/main.yml/badge.svg)](https://github.com/congma/lru_ng/actions/workflows/main.yml)
 [![Travis-CI.com status](https://travis-ci.com/congma/lru_ng.svg?branch=devel)](https://travis-ci.com/congma/lru_ng)
-[![Documentation Status](https://readthedocs.org/projects/lru-ng/badge/?version=latest)](https://lru-ng.readthedocs.org/en/latest/)
+[![Documentation Status](https://readthedocs.org/projects/lru-ng/badge/?version=latest)](https://lru-ng.readthedocs.io/en/latest/)
 
 
 Synopsis
@@ -30,7 +30,7 @@ For more information, please consult the documentation and `pydoc lru_ng`.
 Documentation
 =============
 
-Full documentation can be read online at https://lru-ng.readthedocs.org/
+Full documentation can be read online at https://lru-ng.readthedocs.io/
 
 The documentation source written in reStructuredText is contained in the
 `doc/source` directory. You can build a local copy of the HTML pages using
