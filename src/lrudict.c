@@ -175,17 +175,14 @@ lru_add_node_at_head_impl(LRUDict *self, Node *restrict node)
 
 
 /* There's no way to compute whether an object is "DECREF-safe". We try to give
- * an conservative estimate: Objects not subject to imminent deallocation are
- * "safe", as are some built-in, atom-like objects. This allows us to bypass
- * the push-to-staging and (X)DECREF them. */
+ * an conservative estimate: Some built-in, atom-like objects are safe because
+ * they don't reference other Python objects and their deallocators are
+ * in-built functions that don't manipulate other objects. This allows us to
+ * bypass the push-to-staging and (X)DECREF them. */
 static inline _Bool
 lru_decref_unsafe(const PyObject * restrict obj)
 {
     if (obj == NULL) {
-        return 0;
-    }
-
-    if (Py_REFCNT(obj) > 1) {
         return 0;
     }
 
