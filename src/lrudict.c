@@ -880,21 +880,24 @@ LRU_get(LRUDict *self, PyObject *args)
 }
 
 
+typedef struct _LRUUpdateBuf {
+    PyObject **const restrict buf;
+    const size_t len;
+    size_t n_written;
+    Py_ssize_t pos;
+} update_buf_t;
+
+
 /* Fill at most one buffer of replaced values from self->dict as the src dict
  * is iterated over while updating self->dict.
- *
- * Output parameters:
- * pos: same as in PyDict_Next, the sparse index of dict iteration.
- * n_written: number of buffer elements written in this pass.
  *
  * Return value:
  * 1: source not exhausted
  * 0: source exhausted
  * -1: error occurred */
 static inline int
-lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t *restrict pos,
-                       PyObject **restrict buf, size_t buf_len,
-                       size_t *restrict n_written)
+lru_update_fill_buffer(LRUDict *self, PyObject *src,
+                       update_buf_t *restrict updbuf)
 {
     PyObject *key;
     PyObject *value;
@@ -904,12 +907,12 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t *restrict pos,
 
     i = 0;
     ret_status = 1;
-    while (i < buf_len) {
+    while (i < updbuf->len) {
         int push_status;
 
-        PyObject **restrict cur = buf + i;
+        PyObject **restrict cur = updbuf->buf + i;
 
-        if (PyDict_Next(src, pos, &key, &value)) {
+        if (PyDict_Next(src, &updbuf->pos, &key, &value)) {
             if ((kh = PyObject_Hash(key)) == -1) {
                 ret_status = -1;
                 break;
@@ -930,25 +933,25 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src, Py_ssize_t *restrict pos,
             break;
         }
     }
-    *n_written = i;
+    updbuf->n_written = i;
     return ret_status;
 }
 
 
 /* Update self with other in batches of n at most.
- * Each batch pass into the critical section leaves the buf filled with
- * batch_end old non-NULL values that are DECREF'ed outside the critical
- * section in one sweep. This goes on until other is exhausted, or a failure.
+ * Each batch pass into the critical section leaves the buffer filled with
+ * updbuf->n_written old non-NULL values that are DECREF'ed outside the
+ * critical section in one sweep. This goes on until other is exhausted, or a
+ * failure.
  * Return value: whether the return is caused by a failure. */
 static inline _Bool
-lru_update_with(LRUDict *self, PyObject *other, PyObject **restrict buf,
-                size_t buf_len)
+lru_update_with(LRUDict *self, PyObject *other, update_buf_t *restrict updbuf)
 {
-    Py_ssize_t pos = 0;
-    size_t batch_up_to = 0;
     _Bool fail = 0;
     _Bool leave = 0;
 
+    updbuf->n_written = 0;
+    updbuf->pos = 0;
     do {
         int status;
 
@@ -963,8 +966,7 @@ lru_update_with(LRUDict *self, PyObject *other, PyObject **restrict buf,
 
         self->internal_busy = 1;
 
-        status = lru_update_fill_buffer(self, other, &pos,
-                                        buf, buf_len, &batch_up_to);
+        status = lru_update_fill_buffer(self, other, updbuf);
 
         if (status == -1) {
             fail = 1;
@@ -977,8 +979,8 @@ lru_update_with(LRUDict *self, PyObject *other, PyObject **restrict buf,
         self->internal_busy = 0;
 
         /* Sweep the buffer for this pass. */
-        for (size_t j = 0; j < batch_up_to; j++) {
-            Py_DECREF(buf[j]);
+        for (size_t j = 0; j < updbuf->n_written; j++) {
+            Py_DECREF(updbuf->buf[j]);
         }
     } while (!leave);
 
@@ -1008,8 +1010,6 @@ lru_update_with(LRUDict *self, PyObject *other, PyObject **restrict buf,
 static PyObject *
 LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
 {
-    PyObject **buf;  /* Buffer for replaced values from self->dict. */
-    size_t buf_len;
     PyObject *other = NULL;
     PyObject *res;
     _Bool fail;
@@ -1023,13 +1023,17 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     }
 
     assert(self->size > 0);
-    buf_len = LRU_BATCH_MAX >= self->size ? self->size : LRU_BATCH_MAX;
-    if ((buf = malloc(buf_len * sizeof(PyObject *))) == NULL) {
+    update_buf_t updbuf = {
+        .len = LRU_BATCH_MAX >= self->size ? self->size : LRU_BATCH_MAX,
+        .buf = PyMem_RawMalloc(updbuf.len * sizeof(PyObject *)),
+    };
+    if (updbuf.buf == NULL)
+    {
         return PyErr_NoMemory();
     }
 
     if (other != NULL && PyDict_Check(other)) {
-        fail = lru_update_with(self, other, buf, buf_len);
+        fail = lru_update_with(self, other, &updbuf);
         if (fail) {
             res = NULL;
             goto cleanup;
@@ -1037,7 +1041,7 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     }
 
     if (kwargs != NULL && PyDict_Check(kwargs)) {
-        fail = lru_update_with(self, kwargs, buf, buf_len);
+        fail = lru_update_with(self, kwargs, &updbuf);
         if (fail) {
             res = NULL;
             goto cleanup;
@@ -1045,7 +1049,7 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     }
     res = Py_None;
 cleanup:
-    free(buf);
+    PyMem_RawFree(updbuf.buf);
     lru_purge_staging_impl(self, NO_FORCE_PURGE);
     Py_XINCREF(res);
     return res;
