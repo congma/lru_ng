@@ -2,7 +2,6 @@
 #include "Python.h"
 #include "lrudict_exctype.h"
 #include "lrudict_statstype.h"
-#include <stdlib.h>
 
 
 /*
