@@ -1054,12 +1054,12 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     }
 
     assert(self->size > 0);
+    size_t l = LRU_BATCH_MAX >= self->size ? self->size : LRU_BATCH_MAX;
     update_buf_t updbuf = {
-        .len = LRU_BATCH_MAX >= self->size ? self->size : LRU_BATCH_MAX,
-        .buf = PyMem_RawMalloc(updbuf.len * sizeof(PyObject *)),
+        .len = l,
+        .buf = PyMem_RawMalloc(l * sizeof(PyObject *)),
     };
-    if (updbuf.buf == NULL)
-    {
+    if (updbuf.buf == NULL) {
         return PyErr_NoMemory();
     }
 
