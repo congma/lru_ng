@@ -49,8 +49,8 @@ typedef enum {
  */
 typedef struct _Node {
     PyObject_HEAD
-    struct _Node *restrict prev;
-    struct _Node *restrict next;
+    struct _Node *prev;
+    struct _Node *next;
     PyObject *value;
     PyObject *key;
     Py_hash_t key_hash;
@@ -138,7 +138,7 @@ do {                            \
 
 /* Linked-list data-structure implementations internal to LRUDict */
 static inline void
-lru_remove_node_impl(LRUDict *self, Node *restrict node)
+lru_remove_node_impl(LRUDict *self, Node *node)
 {
     if (self->first == node) {
         self->first = node->next;
@@ -158,7 +158,7 @@ lru_remove_node_impl(LRUDict *self, Node *restrict node)
 
 
 static inline void
-lru_add_node_at_head_impl(LRUDict *self, Node *restrict node)
+lru_add_node_at_head_impl(LRUDict *self, Node *node)
 {
     node->prev = NULL;
     if (!self->first) {
@@ -179,7 +179,7 @@ lru_add_node_at_head_impl(LRUDict *self, Node *restrict node)
  * in-built functions that don't manipulate other objects. This allows us to
  * bypass the push-to-staging and (X)DECREF them. */
 static inline _Bool
-lru_decref_unsafe(const PyObject * restrict obj)
+lru_decref_unsafe(const PyObject *obj)
 {
     if (obj == NULL) {
         return 0;
@@ -566,7 +566,7 @@ LRU_has_key_legacy(LRUDict *self, PyObject *args)
  * them) */
 /* Some building blocks */
 static inline void
-lru_hit_impl(LRUDict *self, Node *restrict node)
+lru_hit_impl(LRUDict *self, Node *node)
 {
     /* We don't need to move the node when it's already self->first. */
     if (node != self->first) {
@@ -626,7 +626,7 @@ LRU_subscript(LRUDict *self, PyObject *key)
  * unusable, the queue is not modified, and the exception is set. */
 static inline int
 lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh,
-                 Node **restrict node_ref)
+                 Node **node_ref)
 {
     /* identify the node to pop by borrowing a ref by key-keyhash. if not, set
      * exception. */
@@ -657,7 +657,7 @@ lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh,
 /* Insert a (well-formed, already-allocated, not-aliased-to-existing) Node
  * object. */
 static inline int
-lru_insert_new_node_impl(LRUDict *self, Node *restrict node)
+lru_insert_new_node_impl(LRUDict *self, Node *node)
 {
     int res;
 
@@ -724,8 +724,10 @@ lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
     else {
         /* replacing old value of key -- no need to create new node, just
          * do the switcheroo for the node's ->value pointer. The former value
-         * is NOT DECREF'ed: it's refcount stays the same and it is now written
-         * to the output parameter oldvalue_ref. */
+         * is NOT DECREF'ed at this point: : it's refcount stays the same and
+         * it is now written to the output parameter oldvalue_ref. The DECREF
+         * is expected to be done by the caller after leaving the critical
+         * section. */
         Py_INCREF(value);
         *oldvalue_ref = node_ref->value;
         node_ref->value = value;

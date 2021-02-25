@@ -52,6 +52,15 @@ class TestRefCount(TestCase):
         # the value
         outer_v.assertEqualRC()
 
+    def test_indexing_assignment_same_object(self):
+        ldobj = LRUDict(4)
+        k = object()
+        v = object()
+        ldobj[k] = v
+        with TrackRCFor(k, v) as t:
+            ldobj[k] = v
+        t.assertEqualRC()
+
     def test_indexing_del(self):
         k = object()
         v = object()
