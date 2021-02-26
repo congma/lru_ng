@@ -218,9 +218,46 @@ Methods emulating :class:`dict`
 
    **Deprecated**. Use :code:`key in L` aka. :meth:`__contains__` instead.
 
+The following methods are modelled with their counterparts of :class:`dict`,
+but instead of returning a *dynamic view* object, they return a list,
+which contains shallow copies, that reflects the state of the :class:`LRUDict`
+object at the time of call. The items returned are in MRU-to-LRU order.
+Accessing the items in the returned sequences will not modify the ordering of
+items in the original :class:`LRUDict` object.
+
+.. py:method:: LRUDict.keys(self, /) -> List
+
+.. py:method:: LRUDict.values(self, /) -> List
+
+.. py:method:: LRUDict.items(self, /) -> List[Tuple[Object, Object]]
+
 
 Methods specific to :class:`LRUDict`
 ------------------------------------
+
+.. py:method:: LRUDict.to_dict(self, /) -> Dict
+
+   Return a new dictionary, :code:`other`, whose keys and values are shallow
+   copies of self's. :code:`other`'s iteration order (i.e.  key-insertion
+   order) is the same as :code:`self`'s recent-use (i.e. LRU-to-MRU) order.
+
+   The method can be loosely considered an inverse of :meth:`update` when
+   evictions are ignored. In other words, if :code:`L` in the following snippet
+   is a :class:`LRUDict` object, :code:`L_dup` will be it's duplicate with the
+   same recent-use order:
+
+   .. code-block:: python
+
+      d = L.to_dict()
+      L_dup = LRUDict(len(d))
+      L_dup.update(d)
+
+   This can be used to dump a picklable copy if the keys and values are
+   picklable. The pickle can be loaded into a dictionary and be used to update
+   an empty :class:`LRUDict` object with sufficient size to restore the
+   original content and order.
+
+   :return: New dictionary.
 
 .. py:method:: LRUDict.peek_first_item(self, /) -> Tuple[Object, Object]
 
