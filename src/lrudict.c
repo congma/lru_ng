@@ -49,11 +49,11 @@ typedef enum {
  */
 typedef struct _Node {
     PyObject_HEAD
+    PyObject *key;
+    PyObject *value;
+    Py_hash_t key_hash;
     struct _Node *prev;
     struct _Node *next;
-    PyObject *value;
-    PyObject *key;
-    Py_hash_t key_hash;
 } Node;
 
 
@@ -802,30 +802,30 @@ static PyMappingMethods LRU_as_mapping = {
 /* Create lists for keys, values, or key-value pairs */
 /* XXX: Legacy behaviour */
 static PyObject *
-collect(LRUDict *self, PyObject * (*getterfunc)(Node *))
+collect(LRUDict *self, PyObject * (*getterfunc)(const Node *restrict))
 {
     PyObject *v;
-    Node *curr;
-    int i;
+    const Node *curr;
+    const Py_ssize_t len = lru_length_impl(self);
 
-    v = PyList_New(lru_length_impl(self));
+    v = PyList_New(len);
     if (v == NULL) {
         return NULL;
     }
 
     curr = self->first;
-    i = 0;
-    while (curr) {
+    Py_ssize_t i = 0;
+    while (curr != NULL) {
         PyList_SET_ITEM(v, i++, getterfunc(curr));
         curr = curr->next;
     }
-    assert(i == lru_length_impl(self));
+    assert(i == len);
     return v;
 }
 
 
 static PyObject *
-get_key(Node *node)
+get_key(const Node *restrict node)
 {
     Py_INCREF(node->key);
     return node->key;
@@ -833,7 +833,8 @@ get_key(Node *node)
 
 
 static PyObject *
-LRU_keys(LRUDict *self, PyObject *Py_UNUSED(ignored)) {
+LRU_keys(LRUDict *self, PyObject *Py_UNUSED(ignored))
+{
     PyObject *result;
 
     /* Only increfs the keys, not critical per se. */
@@ -843,7 +844,7 @@ LRU_keys(LRUDict *self, PyObject *Py_UNUSED(ignored)) {
 
 
 static PyObject *
-get_value(Node *node)
+get_value(const Node *restrict node)
 {
     Py_INCREF(node->value);
     return node->value;
@@ -862,7 +863,7 @@ LRU_values(LRUDict *self, PyObject *Py_UNUSED(ignored))
 
 
 static PyObject *
-get_item(Node *node)
+get_item(const Node *restrict node)
 {
     PyObject *tuple = PyTuple_New(2);
     Py_INCREF(node->key);
