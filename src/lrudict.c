@@ -1307,6 +1307,37 @@ LRU_peek_last_item(LRUDict *self, PyObject *Py_UNUSED(ignored))
 }
 
 
+/* Copy to dict so that the source LRU->MRU order is the dst's key-insertion
+ * order (hence iteration order) */
+static PyObject *
+LRU_to_dict(LRUDict *self, PyObject *Py_UNUSED(ignored))
+{
+    PyObject *dst;
+    int status = 0;
+    const Node *n = self->last;
+
+    if ((dst = PyDict_New()) == NULL) {
+        return NULL;
+    }
+
+    LRU_ENTER_CRIT(self, NULL);
+    while (n != NULL) {
+        status = _PyDict_SetItem_KnownHash(dst, n->key, n->value, n->key_hash);
+        if (status == -1) {
+            break;
+        }
+        n = n->prev;
+    }
+    LRU_LEAVE_CRIT(self);
+
+    if (status == -1) {
+        Py_DECREF(dst);
+        return NULL;
+    }
+    return dst;
+}
+
+
 /* Hit/miss information */
 #ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
 static PyObject *
@@ -1453,6 +1484,9 @@ static PyMethodDef LRU_methods[] = {
     {"update",
         (PyCFunction)(void(*)(void))LRU_update, METH_VARARGS | METH_KEYWORDS,
         PyDoc_STR("update(self, other={}, /, **kwargs)\n--\n\n-> None\nUpdate the LRUDict using the key-value pairs from the dictionary \"other\" and the optional keyword arguments.\nThe update is performed in the iteration order of other, and after that, the kwargs order as specified. This process may cause eviction from the LRUDict.")},
+    {"to_dict",
+        (PyCFunction)LRU_to_dict, METH_NOARGS,
+        PyDoc_STR("to_dict(self, /)\n--\n\n-> Dict\nReturn new dictionary as a shallow copy of self's entries. The dictionary's iteration order is the same as self's LRU-to-MRU order.")},
     {"set_callback",
         (PyCFunction)LRU_set_callback_legacy, METH_VARARGS,
         PyDoc_STR("set_callback(self, callback, /)\n--\n\n-> None\nSet a callback to call when an item is evicted.\nThe callaback has the type Callable[[Object, Object], Any], i.e.,\n    callaback(key, value)\nRaise TypeError if callback is not a callable object that is not None. Setting callback to None disables the callback mechanism.\n*Deprecated:* Assign to the ``callback`` property instead.")},

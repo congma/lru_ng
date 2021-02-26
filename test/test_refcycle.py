@@ -95,3 +95,12 @@ class TestRefCycle(TestCase):
         for i in range(N, 2 * N):
             r[i] = r
         del r
+
+    @yagot.garbage_checked(leaks_only=True)
+    def test_to_dict_cycle(self):
+        r = LRUDict(10)
+        r[0] = r
+        d = r.to_dict()
+        del r
+        d[0]
+        del d[0]

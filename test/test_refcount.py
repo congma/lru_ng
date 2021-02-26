@@ -251,6 +251,15 @@ class TestRefCount(TestCase):
             ldobj.clear()
         t.assertDelta(-2, -1)
 
+    def test_method_to_dict(self):
+        ldobj = LRUDict(5)
+        k = object()
+        v = object()
+        ldobj[k] = v
+        with TrackRCFor(k, v) as t:
+            d = ldobj.to_dict()
+        t.assertDelta(1)
+
     def test_set_size(self):
         ldobj = LRUDict(100)
         big = 4096
