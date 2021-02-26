@@ -1044,7 +1044,7 @@ lru_update_with(LRUDict *self, PyObject *other, update_buf_t *restrict updbuf)
  * source will not fill the replacement buffer as it pushes a huge amount of
  * elements to the list.
  */
-#define LRU_BATCH_MAX   128
+#define LRU_BATCH_MAX   64
 static PyObject *
 LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
 {
@@ -1061,10 +1061,9 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     }
 
     assert(self->size > 0);
-    size_t l = LRU_BATCH_MAX >= self->size ? self->size : LRU_BATCH_MAX;
     update_buf_t updbuf = {
-        .len = l,
-        .buf = PyMem_RawMalloc(l * sizeof(PyObject *)),
+        .len = LRU_BATCH_MAX,
+        .buf = PyMem_Malloc(LRU_BATCH_MAX * sizeof(PyObject *)),
     };
     if (updbuf.buf == NULL) {
         return PyErr_NoMemory();
@@ -1087,7 +1086,7 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     }
     res = Py_None;
 cleanup:
-    PyMem_RawFree(updbuf.buf);
+    PyMem_Free(updbuf.buf);
     lru_purge_staging_impl(self, NO_FORCE_PURGE);
     Py_XINCREF(res);
     return res;
