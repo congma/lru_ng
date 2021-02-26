@@ -840,8 +840,9 @@ LRU_keys(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *result;
 
-    /* Only increfs the keys, not critical per se. */
+    LRU_ENTER_CRIT(self, NULL);
     result = collect(self, get_key);
+    LRU_LEAVE_CRIT(self);
     return result;
 }
 
@@ -859,8 +860,9 @@ LRU_values(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *result;
 
-    /* Only increfs the values, not critical per se. */
+    LRU_ENTER_CRIT(self, NULL);
     result = collect(self, get_value);
+    LRU_LEAVE_CRIT(self);
     return result;
 }
 
@@ -882,8 +884,9 @@ LRU_items(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *result;
 
-    /* Only create new tuples, not critical per se. */
+    LRU_ENTER_CRIT(self, NULL);
     result = collect(self, get_item);
+    LRU_LEAVE_CRIT(self);
     return result;
 }
 
