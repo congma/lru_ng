@@ -161,14 +161,6 @@ class TestRefCount(TestCase):
         # touched.
         t.assertDelta(-1, 0)
 
-    def test_rewriting(self):
-        k, v = "once", "upon a time"
-        ldobj = LRUDict(2)
-        ldobj[k] = v
-        with TrackRCFor(k, v) as t:
-            ldobj[k] = v
-        t.assertEqualRC()
-
     def test_method_get_hitting(self):
         k, v = "something", "something else"
         ldobj = LRUDict(2)
