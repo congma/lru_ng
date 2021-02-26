@@ -288,11 +288,14 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
     len = PyList_Size(self->staging_list);
     for (i = 0; i < len; i++) {
         Node *args;
-        /* new reference */
-        args = (Node *)PySequence_GetItem(self->staging_list, i);
+        /* borrowed reference */
+        args = (Node *)PyList_GetItem(self->staging_list, i);
 
         if (args != NULL) {
             PyObject *result;
+
+            /* temporarily increase refcount of borrowed ref */
+            Py_INCREF(args);
             result = PyObject_CallFunctionObjArgs(cb_tmp,
                                                   args->key, args->value,
                                                   NULL);
@@ -313,6 +316,8 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
                 /* Discard callback return value */
                 Py_DECREF(result);
             }
+            /* undo the temporary refcount increase of borrowed ref */
+            Py_DECREF(args);
         }
         else {  /* if (args), i.e., if we fail to get item from list */
             /* A rather bad situation where our idea of the list is not
@@ -323,8 +328,6 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
                 PyErr_Clear();
             }
         }       /* end of if (args) */
-        /* dispose of new reference to list item */
-        Py_XDECREF(args);
     }   /* end of loop over list items */
 
     if (PyList_SetSlice(self->staging_list, 0, len, NULL) == -1) {
