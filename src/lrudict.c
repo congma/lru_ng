@@ -803,7 +803,6 @@ static PyMappingMethods LRU_as_mapping = {
 
 
 /* Create lists for keys, values, or key-value pairs */
-/* XXX: Legacy behaviour */
 static PyObject *
 collect(LRUDict *self, PyObject * (*getterfunc)(const Node *restrict))
 {
@@ -819,11 +818,22 @@ collect(LRUDict *self, PyObject * (*getterfunc)(const Node *restrict))
     curr = self->first;
     Py_ssize_t i = 0;
     while (curr != NULL) {
-        PyList_SET_ITEM(v, i++, getterfunc(curr));
-        curr = curr->next;
+        PyObject * obj;
+
+        if ((obj = getterfunc(curr)) != NULL) {
+            PyList_SET_ITEM(v, i++, obj);
+            curr = curr->next;
+        }
+        else {
+            goto fail;
+        }
     }
     assert(i == len);
     return v;
+
+fail:
+    Py_DECREF(v);
+    return NULL;
 }
 
 
