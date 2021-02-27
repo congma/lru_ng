@@ -67,11 +67,21 @@ class TestRefCycle(TestCase):
 
     @yagot.garbage_checked(leaks_only=True)
     def test_transient(self):
-        r = LRUDict(1, callback=lambda x, y: (x, y))
+        """Test that GC breaks cycle formed by object stuck in the purge
+        queue (here a condition induced artificially). The callback is not
+        allowed to run in this context.
+        """
+        callback_run = False
+        def cb(*args):
+            nonlocal callback_run
+            callback_run = True
+        r = LRUDict(1, callback=cb)
+        del cb
         r[0] = r
         r._suspend_purge = True
         r[1] = 0
         del r
+        assert not callback_run
 
     @yagot.garbage_checked(leaks_only=True)
     def test_link_callback(self):

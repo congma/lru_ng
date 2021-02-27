@@ -1802,18 +1802,21 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 static int
 LRU_tp_clear(LRUDict *self)
 {
-    self->internal_busy = 0;
-    self->purge_busy = 0;
     /* Release storage (and all nodes in it) */
     if (self->dict) {
+        self->internal_busy = 0;
         /* Will NOT call callback on any staging elems. */
         LRU_clear(self, NULL);
         Py_CLEAR(self->dict);
     }
-    /* Dispose of reference to callback */
+    /* Dispose of reference to callback if any. */
     Py_CLEAR(self->callback);
-    /* Set purge flag, trigger no-callback purge (decref all list elements) */
+    /* Set purge flag, trigger no-callback purge (DECREF all list elements).
+     * This is absolutely vital because the callback cannot be allowed to
+     * execute once we've reached this point where self is being dismantled.
+     * See CPython source Modules/gc_weakref.txt for more. */
     if (self->staging_list) {
+        self->purge_busy = 0;
         self->should_purge = 1;
         lru_purge_staging_impl(self, FORCE_PURGE);
         /* Release purge staging list */
