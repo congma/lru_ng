@@ -3,6 +3,28 @@
 #include "lrudict_exctype.h"
 #include "lrudict_statstype.h"
 
+#if (defined __STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+    #ifndef __STDC_NO_ATOMICS__
+    #define LRUDICT_USE_ATOMIC
+    #endif
+#endif
+
+#ifdef LRUDICT_USE_ATOMIC
+
+#include <stdatomic.h>
+
+#else /* LRUDICT_USE_ATOMIC */
+
+#define _Atomic
+#define atomic_init(obj, val) \
+        do { *(obj) = (val); } while (0)
+#define atomic_load_explicit(obj, order) \
+        (*(obj))
+#define atomic_store_explicit(obj, val, order) \
+        do { *(obj) = (val); } while (0)
+
+#endif /* LRUDICT_USE_ATOMIC */
+
 
 /*
  * This is a simple implementation of LRUDict that uses a Python dict and an
@@ -102,9 +124,9 @@ typedef struct _LRUDict {
     PyObject_HEAD
     _Bool internal_busy:1;
     _Bool detect_conflict:1;
-    _Bool should_purge;
-    _Bool purge_busy:1;
     _Bool purge_suspended:1;
+    _Bool should_purge;
+    _Atomic _Bool purge_busy;
     PyObject *staging_list;
     PyObject *callback;
     Node *first;
@@ -229,9 +251,69 @@ lru_delete_last_impl(LRUDict *self)
 }
 
 
-/* Purging mechanism.
- *
- * NOTE: This is _the_ place where callback gets called. The function is
+/* Purging mechanism. */
+/* Write a message to unraisable hook if Python error is set. */
+static inline void
+lrupurge_unraise(LRUDict *self)
+{
+    if (PyErr_Occurred()) {
+        PyErr_WriteUnraisable((PyObject *)self);
+        PyErr_Clear();
+    }
+}
+
+
+/* Remove items in the staging list in the slice from index 0 to len.
+ * Return boolean flag indicating whether the operation was successful. If not,
+ * the error has been suppressed by "unraising". */
+static inline _Bool
+lrupurge_wipe(LRUDict *self, Py_ssize_t len)
+{
+    if (PyList_SetSlice(self->staging_list, 0, len, NULL) == -1) {
+        lrupurge_unraise(self);
+        return 0;
+    }
+    return 1;
+}
+
+
+/* Enter the purger with a "test and TAS" sequence. Return boolean status about
+ * whether the purger has been entered. */
+static inline _Bool
+lrupurge_enter(LRUDict *self)
+{
+#ifdef LRUDICT_USE_ATOMIC
+    _Bool p;
+
+    if (atomic_load_explicit(&self->purge_busy, memory_order_relaxed)) {
+        return 0;
+    }
+    do {
+        p = 0;
+    } while (!atomic_compare_exchange_weak_explicit(&self->purge_busy, &p, 1,
+                                                    memory_order_acquire,
+                                                    memory_order_relaxed));
+    return 1;
+#else
+    if (self->purge_busy) {
+        return 0;
+    }
+    return self->purge_busy = 1;
+#endif
+}
+
+
+/* Leave the purger. As a side effect, if the staging list has zero length,
+ * reset the should_purge flag. */
+static inline void
+lrupurge_leave(LRUDict *self)
+{
+    self->should_purge = (PyList_Size(self->staging_list) > 0);
+    atomic_store_explicit(&self->purge_busy, 0, memory_order_release);
+}
+
+
+/* NOTE: This is _the_ place where callback gets called. The function is
  * intended to be always called _outside_ the LRUDict-critical section. The
  * reason is that we cannot guarantee the callback function, which can do
  * anything, will play nice with the LRUDict object itself. If the callback
@@ -255,38 +337,35 @@ lru_delete_last_impl(LRUDict *self)
 static Py_ssize_t
 lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
 {
-    Py_ssize_t i, len;
+    Py_ssize_t len;
     PyObject *cb_tmp;
 
-    if (opt != FORCE_PURGE && self->purge_suspended) {
+    if (self->purge_suspended && opt != FORCE_PURGE) {
         return 0;
     }
-    if (!(self->should_purge) || self->internal_busy || self->purge_busy) {
+    if (!self->should_purge) {
+        return 0;
+    }
+    if (!lrupurge_enter(self)) {
         return 0;
     }
 
     /* Easy case: no callback */
     if (self->callback == NULL) {
-        self->purge_busy = 1;
-        self->should_purge = 0;
         len = PyList_Size(self->staging_list);
-        if (PyList_SetSlice(self->staging_list, 0, len, NULL) == -1) {
-            PyErr_WriteUnraisable((PyObject *)self);
-            PyErr_Clear();
+        if (!lrupurge_wipe(self, len)) {
             len = -1;
         }
-        self->purge_busy = 0;
+        lrupurge_leave(self);
         return len;
     }
 
-    self->purge_busy = 1;
-    self->should_purge = 0;
     /* Prevent the callback from being pulled from under us */
     cb_tmp = self->callback;
     Py_INCREF(cb_tmp);
 
     len = PyList_Size(self->staging_list);
-    for (i = 0; i < len; i++) {
+    for (Py_ssize_t i = 0; i < len; i++) {
         Node *args;
         /* borrowed reference */
         args = (Node *)PyList_GetItem(self->staging_list, i);
@@ -300,17 +379,14 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
                                                   args->key, args->value,
                                                   NULL);
             if (result == NULL) {
-                if (PyErr_Occurred()) {
-                    /* Callback indicates failure, Python exception may or may
-                     * not be set. This becomes problematic as the exception
-                     * may interfere with the return of the method that calls
-                     * the purge. We shouldn't assume that the caller of the
-                     * methods is expected to handle the exception caused by a
-                     * totally unrelated reason.
-                     */
-                    PyErr_WriteUnraisable((PyObject *)self);
-                    PyErr_Clear();
-                }
+                /* Callback indicates failure, Python exception may or may
+                 * not be set. This becomes problematic as the exception
+                 * may interfere with the return of the method that calls
+                 * the purge. We shouldn't assume that the caller of the
+                 * methods is expected to handle the exception caused by a
+                 * totally unrelated reason.
+                 */
+                lrupurge_unraise(self);
             }
             else {
                 /* Discard callback return value */
@@ -323,23 +399,17 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
             /* A rather bad situation where our idea of the list is not
              * consistent with the list, and we're not really ready to handle
              * that. */
-            if (PyErr_Occurred()) {
-                PyErr_WriteUnraisable((PyObject *)self);
-                PyErr_Clear();
-            }
+            lrupurge_unraise(self);
         }       /* end of if (args) */
     }   /* end of loop over list items */
 
-    if (PyList_SetSlice(self->staging_list, 0, len, NULL) == -1) {
-        if (PyErr_Occurred()) {
-            PyErr_WriteUnraisable((PyObject *)self);
-            PyErr_Clear();
-            len = -1;
-        }
+    Py_DECREF(cb_tmp);
+
+    if (!lrupurge_wipe(self, len)) {
+        len = -1;
     }
 
-    Py_DECREF(cb_tmp);
-    self->purge_busy = 0;
+    lrupurge_leave(self);
     return len;
 }
 
@@ -1675,10 +1745,10 @@ LRU_init(LRUDict *self, PyObject *args, PyObject *kwds)
     self->first = self->last = NULL;
     self->hits = 0;
     self->misses = 0;
-    self->should_purge = 0;
-    self->purge_busy = 0;
     self->purge_suspended = 0;
     self->detect_conflict = 1;
+    self->should_purge = 0;
+    atomic_init(&self->purge_busy, 0);
     return 0;
 }
 
