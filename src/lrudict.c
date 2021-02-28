@@ -285,15 +285,10 @@ lrupurge_enter(LRUDict *self)
 #ifdef LRUDICT_USE_ATOMIC
     _Bool p;
 
-    if (atomic_load_explicit(&self->purge_busy, memory_order_relaxed)) {
-        return 0;
-    }
-    do {
-        p = 0;
-    } while (!atomic_compare_exchange_weak_explicit(&self->purge_busy, &p, 1,
-                                                    memory_order_acquire,
-                                                    memory_order_relaxed));
-    return 1;
+    p = 0;
+    return atomic_compare_exchange_weak_explicit(&self->purge_busy, &p, 1,
+                                                 memory_order_acquire,
+                                                 memory_order_relaxed);
 #else
     if (self->purge_busy) {
         return 0;
