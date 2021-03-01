@@ -1,29 +1,9 @@
 #define PY_SSIZE_T_CLEAN
 #include "Python.h"
+#include "lrudict.h"
+#include "lrudict_pq.h"
 #include "lrudict_exctype.h"
 #include "lrudict_statstype.h"
-
-#if (defined __STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
-    #ifndef __STDC_NO_ATOMICS__
-    #define LRUDICT_USE_ATOMIC
-    #endif
-#endif
-
-#ifdef LRUDICT_USE_ATOMIC
-
-#include <stdatomic.h>
-
-#else /* LRUDICT_USE_ATOMIC */
-
-#define _Atomic
-#define atomic_init(obj, val) \
-        do { *(obj) = (val); } while (0)
-#define atomic_load_explicit(obj, order) \
-        (*(obj))
-#define atomic_store_explicit(obj, val, order) \
-        do { *(obj) = (val); } while (0)
-
-#endif /* LRUDICT_USE_ATOMIC */
 
 
 /*
@@ -56,27 +36,6 @@
  *  item. Size of list will not grow beyond size of the dict.
  *
  */
-
-
-/* Programming support for manual/forced purging control */
-typedef enum {
-    NO_FORCE_PURGE = 0,
-    FORCE_PURGE = 1,
-} purge_mode_t;
-
-
-/* 
- * Node object and type, lightweight Python object type as stored values in
- * Python dict
- */
-typedef struct _Node {
-    PyObject_HEAD
-    PyObject *key;
-    PyObject *value;
-    Py_hash_t key_hash;
-    struct _Node *prev;
-    struct _Node *next;
-} Node;
 
 
 static void
@@ -116,26 +75,6 @@ do {                            \
     (_node)->key = (_k);        \
     (_node)->key_hash = (_kh);  \
 } while (0)
-
-
-/* Implementation of LRUDict object */
-/* Object structure */
-typedef struct _LRUDict {
-    PyObject_HEAD
-    _Bool internal_busy:1;
-    _Bool detect_conflict:1;
-    _Bool purge_suspended:1;
-    _Bool should_purge;
-    _Atomic _Bool purge_busy;
-    PyObject *staging_list;
-    PyObject *callback;
-    Node *first;
-    Node *last;
-    PyObject *dict;
-    Py_ssize_t size;
-    unsigned long hits;
-    unsigned long misses;
-} LRUDict;
 
 
 /* LRUDict internal critical section macros. These sections must be entered
@@ -219,6 +158,19 @@ lru_decref_unsafe(const PyObject *obj)
 }
 
 
+static inline int
+lrupq_push(LRUDict_pq *q, PyObject *obj)
+{
+    if (PyList_Append(q->lst, obj) != -1) {
+        q->sinfo.tail++;
+        return 0;
+    }
+    else {
+        return -1;
+    }
+}
+
+
 static inline void
 lru_delete_last_impl(LRUDict *self)
 {
@@ -227,7 +179,7 @@ lru_delete_last_impl(LRUDict *self)
         return;
     }
 
-    /* Transfer the node to staging.
+    /* Transfer the node to purge queue.
      * This transfer is not merely conditional on self->callback being set or
      * not. Not having a callback doesn't mean we can safely DECREF the node
      * here, because as we DECREF the last reference to the node, it's possible
@@ -239,9 +191,7 @@ lru_delete_last_impl(LRUDict *self)
         if (self->callback ||
             lru_decref_unsafe(n->value) || lru_decref_unsafe(n->key))
         {
-            if (PyList_Append(self->staging_list, (PyObject *)n) != -1) {
-                self->should_purge = 1;
-            }
+            lrupq_push(self->purge_queue, (PyObject *)n);
         }
     }
     /* This DECREF in the case when the list append isn't succesful (a rare
@@ -253,159 +203,13 @@ lru_delete_last_impl(LRUDict *self)
 
 /* Purging mechanism. */
 /* Write a message to unraisable hook if Python error is set. */
-static inline void
-lrupurge_unraise(LRUDict *self)
-{
-    if (PyErr_Occurred()) {
-        PyErr_WriteUnraisable((PyObject *)self);
-        PyErr_Clear();
-    }
-}
-
-
-/* Remove items in the staging list in the slice from index 0 to len.
- * Return boolean flag indicating whether the operation was successful. If not,
- * the error has been suppressed by "unraising". */
-static inline _Bool
-lrupurge_wipe(LRUDict *self, Py_ssize_t len)
-{
-    if (PyList_SetSlice(self->staging_list, 0, len, NULL) == -1) {
-        lrupurge_unraise(self);
-        return 0;
-    }
-    return 1;
-}
-
-
-/* Enter the purger with a "test and TAS" sequence. Return boolean status about
- * whether the purger has been entered. */
-static inline _Bool
-lrupurge_enter(LRUDict *self)
-{
-#ifdef LRUDICT_USE_ATOMIC
-    _Bool p;
-
-    p = 0;
-    return atomic_compare_exchange_weak_explicit(&self->purge_busy, &p, 1,
-                                                 memory_order_acquire,
-                                                 memory_order_relaxed);
-#else
-    if (self->purge_busy) {
-        return 0;
-    }
-    return self->purge_busy = 1;
-#endif
-}
-
-
-/* Leave the purger. As a side effect, if the staging list has zero length,
- * reset the should_purge flag. */
-static inline void
-lrupurge_leave(LRUDict *self)
-{
-    self->should_purge = (PyList_Size(self->staging_list) > 0);
-    atomic_store_explicit(&self->purge_busy, 0, memory_order_release);
-}
-
-
-/* NOTE: This is _the_ place where callback gets called. The function is
- * intended to be always called _outside_ the LRUDict-critical section. The
- * reason is that we cannot guarantee the callback function, which can do
- * anything, will play nice with the LRUDict object itself. If the callback
- * were executed within the critical section where/while the object internal
- * data is not consistent, the inconsistency can be left exposed.
- *
- * The staging area is just a Python list, and if a callback is set, it is
- * called along the list in ascending index order. Then the list elements are
- * wiped.
- *
- * The function must be called while the GIL is held. This is normally true,
- * but the callback may execute a code path that release the GIL. For this
- * reason a busy bit, self->purge_busy, is checked. While this bit is set,
- * another call into the section immediately returns (balks). The list may grow
- * during the callback action, and the recently appended items will be purged
- * later.
- *
- * Return value: an estimate of the number of elements purged, or -1 in the
- * case that such estsimate cannot be made because of internal error.
- */
-static Py_ssize_t
+static inline Py_ssize_t
 lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
 {
-    Py_ssize_t len;
-    PyObject *cb_tmp;
-
     if (self->purge_suspended && opt != FORCE_PURGE) {
         return 0;
     }
-    if (!self->should_purge) {
-        return 0;
-    }
-    if (!lrupurge_enter(self)) {
-        return 0;
-    }
-
-    /* Easy case: no callback */
-    if (self->callback == NULL) {
-        len = PyList_Size(self->staging_list);
-        if (!lrupurge_wipe(self, len)) {
-            len = -1;
-        }
-        lrupurge_leave(self);
-        return len;
-    }
-
-    /* Prevent the callback from being pulled from under us */
-    cb_tmp = self->callback;
-    Py_INCREF(cb_tmp);
-
-    len = PyList_Size(self->staging_list);
-    for (Py_ssize_t i = 0; i < len; i++) {
-        Node *args;
-        /* borrowed reference */
-        args = (Node *)PyList_GetItem(self->staging_list, i);
-
-        if (args != NULL) {
-            PyObject *result;
-
-            /* temporarily increase refcount of borrowed ref */
-            Py_INCREF(args);
-            result = PyObject_CallFunctionObjArgs(cb_tmp,
-                                                  args->key, args->value,
-                                                  NULL);
-            if (result == NULL) {
-                /* Callback indicates failure, Python exception may or may
-                 * not be set. This becomes problematic as the exception
-                 * may interfere with the return of the method that calls
-                 * the purge. We shouldn't assume that the caller of the
-                 * methods is expected to handle the exception caused by a
-                 * totally unrelated reason.
-                 */
-                lrupurge_unraise(self);
-            }
-            else {
-                /* Discard callback return value */
-                Py_DECREF(result);
-            }
-            /* undo the temporary refcount increase of borrowed ref */
-            Py_DECREF(args);
-        }
-        else {  /* if (args), i.e., if we fail to get item from list */
-            /* A rather bad situation where our idea of the list is not
-             * consistent with the list, and we're not really ready to handle
-             * that. */
-            lrupurge_unraise(self);
-        }       /* end of if (args) */
-    }   /* end of loop over list items */
-
-    Py_DECREF(cb_tmp);
-
-    if (!lrupurge_wipe(self, len)) {
-        len = -1;
-    }
-
-    lrupurge_leave(self);
-    return len;
+    return lru_purge(self->purge_queue, self->callback);
 }
 
 
@@ -1458,7 +1262,6 @@ LRU_get_stats(LRUDict *self, PyObject *Py_UNUSED(ignored))
 static PyObject *
 LRU_purge(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
-    self->should_purge = 1;
     return PyLong_FromSsize_t(lru_purge_staging_impl(self, FORCE_PURGE));
 }
 
@@ -1494,8 +1297,8 @@ LRU__purge_queue_size_getter(LRUDict *self, void *closure)
 {
     Py_ssize_t len = 0;
     (void)closure;
-    if (self->staging_list) {
-        len = PyList_Size(self->staging_list);
+    if (self->purge_queue) {
+        len = self->purge_queue->sinfo.tail;
     }
     return PyLong_FromSsize_t(len);
 }
@@ -1715,9 +1518,7 @@ LRU_init(LRUDict *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    if ((self->staging_list = PyList_New(0)) == NULL) {
-        PyErr_SetString(PyExc_MemoryError,
-                "internal staging list allocation failure");
+    if ((self->purge_queue = lrupq_new()) == NULL) {
         return -1;
     }
 
@@ -1742,8 +1543,6 @@ LRU_init(LRUDict *self, PyObject *args, PyObject *kwds)
     self->misses = 0;
     self->purge_suspended = 0;
     self->detect_conflict = 1;
-    self->should_purge = 0;
-    atomic_init(&self->purge_busy, 0);
     return 0;
 }
 
@@ -1770,12 +1569,14 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
         cur = cur->prev;
     }
 
-    if (self->staging_list) {
-        Py_ssize_t len = PyList_Size(self->staging_list);
+    if (self->purge_queue && self->purge_queue->lst) {
+        Py_ssize_t len = PyList_Size(self->purge_queue->lst);
         for (Py_ssize_t i = 0; i < len; i++) {
-            cur = (Node *)PyList_GET_ITEM(self->staging_list, i);
-            Py_VISIT(cur->value);
-            Py_VISIT(cur->key);
+            cur = (Node *)PyList_GET_ITEM(self->purge_queue->lst, i);
+            if (cur) {
+                Py_VISIT(cur->value);
+                Py_VISIT(cur->key);
+            }
         }
     }
 
@@ -1806,16 +1607,24 @@ LRU_tp_clear(LRUDict *self)
     }
     /* Dispose of reference to callback if any. */
     Py_CLEAR(self->callback);
-    /* Set purge flag, trigger no-callback purge (DECREF all list elements).
-     * This is absolutely vital because the callback cannot be allowed to
-     * execute once we've reached this point where self is being dismantled.
-     * See CPython source Modules/gc_weakref.txt for more. */
-    if (self->staging_list) {
-        self->purge_busy = 0;
-        self->should_purge = 1;
+    /* Trigger no-callback purge (DECREF all list elements).  This is
+     * absolutely vital because the callback cannot be allowed to execute once
+     * we've reached this point where self is being dismantled.  See CPython
+     * source Modules/gc_weakref.txt for more. */
+    if (self->purge_queue) {
         lru_purge_staging_impl(self, FORCE_PURGE);
-        /* Release purge staging list */
-        Py_CLEAR(self->staging_list);
+        /* Release purge queue */
+        if (lrupq_free(self->purge_queue) == -1) {
+            /* This means the purge queue is still busy at the time of
+             * teardown. This is a very bad and almost fatal error. */
+            PyErr_SetString(PyExc_RuntimeError,
+                            "Fatal error: purge queue still busy.");
+            PyErr_WriteUnraisable(self->purge_queue->lst);
+            PyErr_Clear();
+            /* Force DECREF the Python list underlying the purge queue. */
+            Py_CLEAR(self->purge_queue->lst);
+        }
+        self->purge_queue = NULL;
     }
     return 0;
 }
