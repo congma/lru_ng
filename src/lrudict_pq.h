@@ -25,6 +25,6 @@ int
 lrupq_free(LRUDict_pq *q);
 
 Py_ssize_t
-lrupq_purge(LRUDict_pq *q, PyObject *callback);
+lru_purge(LRUDict_pq *q, PyObject *callback);
 
 #endif
