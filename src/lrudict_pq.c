@@ -70,7 +70,14 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
 
     /* Load status quo */
     batch = q->sinfo;
-    /* Skip if there's nothing to do. */
+    /* Skip if there's nothing to do. Also, we don't need to check for list
+     * storage-freeing opportunity when given an empty slice, as long as we
+     * assume that the callback always returns eventually, and that the list
+     * slice-deletion always succeeds. The former is usually true (if not, we
+     * have bigger problems), and the latter seems to hinge on "an assumption
+     * that the system realloc() never fails when passed a number of bytes <=
+     * the number of bytes last allocated" (see CPython Objects/listobject.c).
+     */
     if (batch.tail == batch.head) {
         return 0;
     }
