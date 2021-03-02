@@ -63,7 +63,7 @@ lrupq_free(LRUDict_pq *q)
  * Return the number of items actually dislodged from the head of the queue,
  * or -1 in the case of error. */
 Py_ssize_t
-lru_purge(LRUDict_pq *q, PyObject *callback)
+lrupq_purge(LRUDict_pq *q, PyObject *callback)
 {
     Py_ssize_t res;
     struct _pq_sinfo batch;
@@ -83,9 +83,8 @@ lru_purge(LRUDict_pq *q, PyObject *callback)
     /* Claim up to current tail. */
     q->sinfo.head = batch.tail;
 
-    q->pending_requests++;
-
     if (callback != NULL) {
+        q->pending_requests++;
         Py_INCREF(callback);
 
         for (Py_ssize_t i = batch.head; i < batch.tail; i++) {
@@ -111,12 +110,13 @@ lru_purge(LRUDict_pq *q, PyObject *callback)
         }
 
         Py_DECREF(callback);
+        q->pending_requests--;
     }
 
-    q->pending_requests--;
-
     /* Reclaim storage space from garbage items before head. Only do this while
-     * no one else's working on the list. */
+     * no one else's working on the list.
+     * The last one to leave the building turns off the lights (on behalf of
+     * everyone). */
     if (q->pending_requests == 0) {
         q->pending_requests++;
 

@@ -209,7 +209,7 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
     if (self->purge_suspended && opt != FORCE_PURGE) {
         return 0;
     }
-    return lru_purge(self->purge_queue, self->callback);
+    return lrupq_purge(self->purge_queue, self->callback);
 }
 
 
