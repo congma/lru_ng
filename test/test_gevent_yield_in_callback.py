@@ -65,8 +65,6 @@ def test_callback_unique_keys(n_pusher, cache_size, stride):
                 pulled_keys[s[0]] += 1
             finally:
                 gevent.sleep(0)
-        # As a consequence of the test some keys may remain in the queue.
-        cache.purge()
         return pulled_keys
 
     chunks = [range(i * stride, (i + 1) * stride) for i in range(n_pusher)]

@@ -5,9 +5,12 @@ except ModuleNotFoundError:
 
 
 modextension = Extension("lru_ng",
-                         sources=["src/lrudict.c"],
-                         depends=["src/lrudict_exctype.h",
-                                  "src/lrudict_statstype.h"])
+                         sources=["src/lrudict.c",
+                                  "src/lrudict_pq.c"],
+                         depends=["src/lrudict.h",
+                                  "src/lrudict_exctype.h",
+                                  "src/lrudict_statstype.h",
+                                  "src/lrudict_pq.h"])
 
 
 setup(name="lru_ng",
