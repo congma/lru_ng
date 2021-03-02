@@ -1547,17 +1547,32 @@ LRU_init(LRUDict *self, PyObject *args, PyObject *kwds)
 }
 
 
+/* Safe-finalization support. */
+static void
+LRU_fini(LRUDict *self)
+{
+    PyObject *exc_type, *exc_value, *traceback;
+    PyErr_Fetch(&exc_type, &exc_value, &traceback);
+
+    /* One last chance to honour any callback. */
+    lru_purge_staging_impl(self, FORCE_PURGE);
+
+    PyErr_Restore(exc_type, exc_value, traceback);
+    return;
+}
+
+
 /* NOTE: Argument names should not change because the function uses Py_VISIT
  * macro.
  *
  * The GC bypasses the Node object because there's no need to track a large
  * number of small Node objects. A Node can only be created by us and it can
- * only be found as values in self->dict or items in self->staging_list, and it
- * cannot be shared by different dicts. When doing the traverse we already know
- * where to visit, and we directly visit the Node's Python-object members
- * (which it owns). The visitations honour breadth-first traversal partially,
- * by first visiting node values (most likely place to form cycles), then
- * staging_list (usually short), followed by node keys, and finally the
+ * only be found as values in self->dict or items in self->purge_queue->lst,
+ * and it cannot be shared by different dicts. When doing the traverse we
+ * already know where to visit, and we directly visit the Node's Python-object
+ * members (which it owns). The visitations honour breadth-first traversal
+ * partially, by first visiting node values (most likely place to form cycles),
+ * then purge queue (usually short), followed by node keys, and finally the
  * callback object. */
 static int
 LRU_traverse(LRUDict *self, visitproc visit, void *arg)
@@ -1605,27 +1620,24 @@ LRU_tp_clear(LRUDict *self)
         LRU_clear(self, NULL);
         Py_CLEAR(self->dict);
     }
-    /* Dispose of reference to callback if any. */
-    Py_CLEAR(self->callback);
-    /* Trigger no-callback purge (DECREF all list elements).  This is
-     * absolutely vital because the callback cannot be allowed to execute once
-     * we've reached this point where self is being dismantled.  See CPython
-     * source Modules/gc_weakref.txt for more. */
     if (self->purge_queue) {
-        lru_purge_staging_impl(self, FORCE_PURGE);
         /* Release purge queue */
         if (lrupq_free(self->purge_queue) == -1) {
             /* This means the purge queue is still busy at the time of
              * teardown. This is a very bad and almost fatal error. */
             PyErr_SetString(PyExc_RuntimeError,
-                            "Fatal error: purge queue still busy.");
+                            "Fatal error: purge queue busy at teardown.");
             PyErr_WriteUnraisable(self->purge_queue->lst);
             PyErr_Clear();
-            /* Force DECREF the Python list underlying the purge queue. */
-            Py_CLEAR(self->purge_queue->lst);
+            /* Force mem-free the purge_queue object (not done by lrupq_free in
+             * case of failure) but not the underlying list (less chance to
+             * crash any callbacks still pending, but will leak a list). */
+            PyMem_Free(self->purge_queue);
         }
         self->purge_queue = NULL;
     }
+    /* Dispose of reference to callback if any. */
+    Py_CLEAR(self->callback);
     return 0;
 }
 
@@ -1634,6 +1646,11 @@ LRU_tp_clear(LRUDict *self)
 static void
 LRU_dealloc(LRUDict *self)
 {
+    if (PyObject_CallFinalizerFromDealloc((PyObject *)self) < 0) {
+        /* Resurrected */
+        return;
+    }
+
     PyObject_GC_UnTrack((PyObject *)self);
 
     LRU_tp_clear(self);
@@ -1671,12 +1688,14 @@ static PyTypeObject LRUDictType = {
     .tp_as_sequence = &LRU_as_sequence,
     .tp_as_mapping = &LRU_as_mapping,
     .tp_hash = PyObject_HashNotImplemented,
-    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .tp_flags = (Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
+                 Py_TPFLAGS_HAVE_FINALIZE),
     .tp_doc = lru_doc,
     .tp_methods = LRU_methods,
     .tp_getset = LRU_descriptors,
     .tp_init = (initproc)LRU_init,
     .tp_new = PyType_GenericNew,
+    .tp_finalize = (destructor)LRU_fini,
 };
 
 
