@@ -3,6 +3,13 @@
 #include "lrudict_pq.h"
 #include "lrudict.h" /* For Node */
 #include <limits.h>
+#if (defined __STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
+    #ifndef __STDC_NO_ATOMICS__
+        #include <stdatomic.h>
+    #else
+        #define atomic_thread_fence(order) do { /* nothing */ } while (0)
+    #endif
+#endif
 
 
 /* Internal function: check exception, write a message to unraisable hook, and
@@ -63,29 +70,28 @@ lrupq_free(LRUDict_pq *q)
  * Return the number of items actually dislodged from the head of the queue,
  * or -1 in the case of error. */
 Py_ssize_t
-lru_purge(LRUDict_pq *q, PyObject *callback)
+lrupq_purge(LRUDict_pq *q, PyObject *callback)
 {
     Py_ssize_t res;
     struct _pq_sinfo batch;
 
     /* Load status quo */
+    atomic_thread_fence(memory_order_acquire);
     batch = q->sinfo;
-    /* Skip if there's nothing to do. */
-    if (batch.tail == batch.head) {
-        return 0;
-    }
+
+    /* Claim up to current tail. */
+    q->sinfo.head = batch.tail;
+    atomic_thread_fence(memory_order_release);
+
+    /* No need to check for empty batch: the for loop below does it. */
 
     /* Skip if too many pending. */
     if (q->pending_requests == UINT_MAX) {
         return 0;
     }
 
-    /* Claim up to current tail. */
-    q->sinfo.head = batch.tail;
-
-    q->pending_requests++;
-
     if (callback != NULL) {
+        q->pending_requests++;
         Py_INCREF(callback);
 
         for (Py_ssize_t i = batch.head; i < batch.tail; i++) {
@@ -111,16 +117,18 @@ lru_purge(LRUDict_pq *q, PyObject *callback)
         }
 
         Py_DECREF(callback);
+        q->pending_requests--;
     }
 
-    q->pending_requests--;
-
     /* Reclaim storage space from garbage items before head. Only do this while
-     * no one else's working on the list. */
+     * no one else's working on the list.
+     * The last one to leave the building turns off the lights (on behalf of
+     * everyone). */
     if (q->pending_requests == 0) {
         q->pending_requests++;
 
         /* Re-load current status. */
+        atomic_thread_fence(memory_order_acquire);
         batch = q->sinfo;
 
         if (PyList_SetSlice(q->lst, 0, batch.head, NULL) == -1) {
@@ -133,6 +141,8 @@ lru_purge(LRUDict_pq *q, PyObject *callback)
             q->sinfo.head -= res;
             q->sinfo.tail -= res;
         }
+        atomic_thread_fence(memory_order_release);
+
         q->pending_requests--;
     }
     else {
