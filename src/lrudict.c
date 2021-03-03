@@ -217,7 +217,7 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
 static inline Py_ssize_t
 lru_length_impl(LRUDict *self)
 {
-    return PyDict_Size(self->dict);
+    return ((PyDictObject*)(self->dict))->ma_used;
 }
 
 
@@ -254,7 +254,7 @@ lru_set_size_impl(LRUDict *self, Py_ssize_t newsize)
     }
 
     self->size = newsize;
-    while (lru_length_impl(self) > newsize) {
+    for (Py_ssize_t len = lru_length_impl(self); len > newsize; len--) {
         lru_delete_last_impl(self);
     }
 
@@ -487,6 +487,21 @@ LRU_subscript(LRUDict *self, PyObject *key)
 }
 
 
+/* Optimized hash getter function that uses the memoized hash for strings. See
+ * CPython: Objects/dictobject.c */
+static inline Py_hash_t
+get_hash(PyObject *k)
+{
+    Py_hash_t hash;
+
+    if (!PyUnicode_CheckExact(k) || (hash = ((PyASCIIObject *)k)->hash) == -1)
+    {
+        hash = PyObject_Hash(k);
+    }
+    return hash;
+}
+
+
 /* Pop node by key and key hash kh. Return error status.
  *
  * In the case of success (return value != -1), the output parameter node_ref
@@ -620,7 +635,7 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
     int res;
     Py_hash_t kh;
 
-    if ((kh = PyObject_Hash(key)) == -1) {
+    if ((kh = get_hash(key)) == -1) {
         return -1;
     }
 
@@ -830,7 +845,7 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src,
         PyObject **restrict cur = updbuf->buf + i;
 
         if (PyDict_Next(src, &updbuf->pos, &key, &value)) {
-            if ((kh = PyObject_Hash(key)) == -1) {
+            if ((kh = get_hash(key)) == -1) {
                 ret_status = -1;
                 break;
             }
@@ -989,7 +1004,7 @@ LRU_setdefault(LRUDict *self, PyObject *args)
     }
     assert(key != NULL);
     assert(default_obj != NULL);
-    if ((kh = PyObject_Hash(key)) == -1) {
+    if ((kh = get_hash(key)) == -1) {
         return NULL;
     }
 
@@ -1315,7 +1330,7 @@ static PyMethodDef LRU_methods[] = {
         (PyCFunction)LRU_contains, METH_O | METH_COEXIST,
         PyDoc_STR("__contains__(self, key, /)\n--\n\n-> Bool\nCheck if key is in the LRUDict.")},
     {"__getitem__",
-        (PyCFunction)LRU_subscript, METH_O|  METH_COEXIST,
+        (PyCFunction)LRU_subscript, METH_O | METH_COEXIST,
         PyDoc_STR("__getitem__(self, key, /)\n--\n\nReturn the value associated with key or raise KeyError if key is not found.")},
     {"keys",
         (PyCFunction)LRU_keys, METH_NOARGS,
