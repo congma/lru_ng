@@ -6,9 +6,9 @@ import pytest
 from lru_ng import LRUDict
 
 
-@pytest.mark.parametrize("stride", (1, 2, 10, 20))
-@pytest.mark.parametrize("cache_size", (1, 2, 10, 11, 100))
-@pytest.mark.parametrize("n_pusher", range(0, 5))
+@pytest.mark.parametrize("stride", (1, 2, 3, 7, 19))
+@pytest.mark.parametrize("cache_size", (1, 2, 3, 10, 11, 23, 100))
+@pytest.mark.parametrize("n_pusher", range(0, 8))
 def test_callback_unique_keys(n_pusher, cache_size, stride):
     """The necessary conditions being tested are, assuming that the collection
     of keys pushed by each pusher do not overlap with each other:

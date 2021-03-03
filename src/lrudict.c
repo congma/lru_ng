@@ -96,6 +96,9 @@ do {                            \
     (self)->internal_busy = 0;  \
 } while (0)
 
+#define PURGE_BUT_FAIL(self)  \
+    (lru_purge_staging_impl((self), NO_FORCE_PURGE) == -2)
+
 
 /* Linked-list data-structure implementations internal to LRUDict */
 static inline void
@@ -289,7 +292,10 @@ LRU_size_setter(LRUDict *self, PyObject *value, void *closure)
     LRU_ENTER_CRIT(self, -1);
     status = lru_set_size_impl(self, newsize);
     LRU_LEAVE_CRIT(self);
-    lru_purge_staging_impl(self, NO_FORCE_PURGE);
+
+    if (PURGE_BUT_FAIL(self)) {
+        return -1;
+    }
 
     return status;
 }
@@ -308,7 +314,10 @@ LRU_set_size_legacy(LRUDict *self, PyObject *args)
     LRU_ENTER_CRIT(self, NULL);
     status = lru_set_size_impl(self, newsize);
     LRU_LEAVE_CRIT(self);
-    lru_purge_staging_impl(self, NO_FORCE_PURGE);
+
+    if (PURGE_BUT_FAIL(self)) {
+        return NULL;
+    }
 
     if (status == -1) {
         return NULL;
@@ -487,7 +496,7 @@ LRU_subscript(LRUDict *self, PyObject *key)
 }
 
 
-/* Optimized hash getter function that uses the memoized hash for strings. See
+/* Optimized hash getter code-path that uses the memoized hash for strings. See
  * CPython: Objects/dictobject.c */
 static inline Py_hash_t
 get_hash(PyObject *k)
@@ -661,10 +670,14 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
         LRU_LEAVE_CRIT(self);
         if (res == 0) {
             if (old_value != NULL) {
+                /* Replaced old_value */
                 Py_DECREF(old_value);
             }
             else {
-                lru_purge_staging_impl(self, NO_FORCE_PURGE);
+                /* Inserted value */
+                if (PURGE_BUT_FAIL(self)) {
+                    return -1;
+                }
             }
         }
         return res;
@@ -981,7 +994,9 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     res = Py_None;
 cleanup:
     PyMem_Free(updbuf.buf);
-    lru_purge_staging_impl(self, NO_FORCE_PURGE);
+    if (PURGE_BUT_FAIL(self)) {
+        res = NULL;
+    }
     Py_XINCREF(res);
     return res;
 }
@@ -1011,6 +1026,7 @@ LRU_setdefault(LRUDict *self, PyObject *args)
     LRU_ENTER_CRIT(self, NULL);
     /* Try borrowing a ref by key */
     ret_node = (Node *)_PyDict_GetItem_KnownHash(self->dict, key, kh);
+    /* XXX: use a less nesty style */
     if (ret_node == NULL) {
         /* Error or key not in */
         if (PyErr_Occurred()) { /* GetItem internal error */
@@ -1047,7 +1063,11 @@ LRU_setdefault(LRUDict *self, PyObject *args)
         res = ret_node->value;
     }         /* end test if (ret_node == NULL) */
     LRU_LEAVE_CRIT(self);
-    lru_purge_staging_impl(self, NO_FORCE_PURGE);
+
+    if (PURGE_BUT_FAIL(self)) {
+        Py_XDECREF(res);
+        res = NULL;
+    }
 
     return res;
 }
@@ -1267,8 +1287,7 @@ fail:
 static PyObject *
 LRU_get_stats(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
-    PyObject *res = Py_BuildValue("(kk)", self->hits, self->misses);
-    return res;
+    return Py_BuildValue("(kk)", self->hits, self->misses);
 }
 #endif /* LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN */
 
@@ -1277,7 +1296,8 @@ LRU_get_stats(LRUDict *self, PyObject *Py_UNUSED(ignored))
 static PyObject *
 LRU_purge(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
-    return PyLong_FromSsize_t(lru_purge_staging_impl(self, FORCE_PURGE));
+    Py_ssize_t status = lru_purge_staging_impl(self, FORCE_PURGE);
+    return status == -2 ? NULL : PyLong_FromSsize_t(status);
 }
 
 
@@ -1570,7 +1590,9 @@ LRU_fini(LRUDict *self)
     PyErr_Fetch(&exc_type, &exc_value, &traceback);
 
     /* One last chance to honour any callback. */
-    lru_purge_staging_impl(self, FORCE_PURGE);
+    if (lru_purge_staging_impl(self, FORCE_PURGE) == -2) {
+        PyErr_WriteUnraisable((PyObject *)self);
+    }
 
     PyErr_Restore(exc_type, exc_value, traceback);
     return;
