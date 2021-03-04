@@ -37,7 +37,8 @@ lrupq_new(void)
 
     q->lst = new_list;
     q->sinfo.head = q->sinfo.tail = 0;
-    q->pending_requests = 0;
+    q->n_max = (LRUPQ_N_MAX_DEFAULT);
+    q->n_active = 0;
     return q;
 }
 
@@ -48,7 +49,7 @@ lrupq_new(void)
 int
 lrupq_free(LRUDict_pq *q)
 {
-    if (q->pending_requests) {
+    if (q->n_active) {
         return -1;
     }
     else {
@@ -59,9 +60,28 @@ lrupq_free(LRUDict_pq *q)
 }
 
 
+/* Check for the four horsepersons...
+ * - RecursionError: Prevent "Fatal Python error: Cannot recover from stack
+ *   overflow"; should fail early and let Python know.
+ * - SystemError: Should be bubbled up all the way back to Python.
+ * - MemoryError: Same as above.
+ * - SystemExit: Always honour explicit process-level exit.
+ */
+static inline _Bool
+lrupq_err_bad(PyObject *exc)
+{
+    return (PyErr_GivenExceptionMatches(exc, PyExc_RecursionError) ||
+            PyErr_GivenExceptionMatches(exc, PyExc_SystemError) ||
+            PyErr_GivenExceptionMatches(exc, PyExc_MemoryError) ||
+            PyErr_GivenExceptionMatches(exc, PyExc_SystemExit));
+}
+
+
 /* Execute the purge with callback (optional, can be NULL).
  * Return the number of items actually dislodged from the head of the queue,
- * or -1 in the case of error. */
+ * or -1 in the case of "swallowed" error, or -2 in the case of unrecoverable
+ * error that should request the attention of Python (thinking of this as an
+ * escape hatch). */
 Py_ssize_t
 lrupq_purge(LRUDict_pq *q, PyObject *callback)
 {
@@ -82,8 +102,18 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
         return 0;
     }
 
-    /* Skip if too many pending. */
-    if (q->pending_requests == UINT_MAX) {
+    /* Skip if too many pending.
+     * Notice that, on the one hand, a larger limit increases the possibility
+     * of hitting recursion limit with a misbehaving callback (a good thing),
+     * but also the chance of convoy effect on the GIL if multiple threads
+     * requests GIL release and re-acquisition in the (pending) callback. OTOH,
+     * a lower value makes the queue more likely to have stuck items (by not
+     * being purged as aggressively), and (somewhat counterintuitively) a
+     * runaway callback less likely to be stopped by the recursion limit
+     * (because the new calls return early). However, it prevents threads from
+     * thrashing heavily upon each other.
+     */
+    if (q->n_active >= q->n_max) {
         return 0;
     }
 
@@ -91,7 +121,8 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
     q->sinfo.head = batch.tail;
 
     if (callback != NULL) {
-        q->pending_requests++;
+        _Bool fail = 0;
+        q->n_active++;
         Py_INCREF(callback);
 
         for (Py_ssize_t i = batch.head; i < batch.tail; i++) {
@@ -100,32 +131,54 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
             /* Borrow reference from list. */
             n = (Node *)PyList_GetItem(q->lst, i);
 
-            if (n != NULL) {
-                cres = PyObject_CallFunctionObjArgs(callback,
-                                                    n->key, n->value, NULL);
-                if (cres == NULL) {
-                    lrupurge_unraise(callback);
-                }
-                else {
-                    /* Discard return value of callback. */
-                    Py_DECREF(cres);
-                }
-            }
-            else {
+            if (n == NULL) {
                 lrupurge_unraise(q->lst);
+                continue;
             }
-        }
+
+            cres = PyObject_CallFunctionObjArgs(callback, n->key, n->value,
+                                                NULL);
+            if (cres != NULL) {
+                /* Discard return value of callback. */
+                Py_DECREF(cres);
+                continue;
+            }
+
+            /* This block is executed if callback returns NULL. A sufficiently
+             * bad callback may fail to set (or swallow) exception, so we check
+             * explicitly. */
+            {
+                PyObject *exc = PyErr_Occurred();
+                if (exc) {
+                    if (lrupq_err_bad(exc)) {
+                        /* External exception that needs the attention of
+                         * interpreter: do not suppress. Instead, abandon,
+                         * leave loop, and signal our intent to go all the way
+                         * back to Python. */
+                        fail = 1;
+                        break;
+                    }
+                    else {
+                        PyErr_WriteUnraisable(callback);
+                        PyErr_Clear();
+                    }
+                }
+            }
+        }  /* end of "for item in batch" loop */
 
         Py_DECREF(callback);
-        q->pending_requests--;
+        q->n_active--;
+        if (fail) {
+            return -2;
+        }
     }
 
     /* Reclaim storage space from garbage items before head. Only do this while
      * no one else's working on the list.
      * The last one to leave the building turns off the lights (on behalf of
      * everyone). */
-    if (q->pending_requests == 0) {
-        q->pending_requests++;
+    if (q->n_active == 0) {
+        q->n_active++;
 
         /* Re-load current status. */
         batch = q->sinfo;
@@ -140,7 +193,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
             q->sinfo.head -= res;
             q->sinfo.tail -= res;
         }
-        q->pending_requests--;
+        q->n_active--;
     }
     else {
         res = 0;

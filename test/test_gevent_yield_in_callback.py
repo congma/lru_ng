@@ -6,9 +6,9 @@ import pytest
 from lru_ng import LRUDict
 
 
-@pytest.mark.parametrize("stride", (1, 2, 10, 20))
-@pytest.mark.parametrize("cache_size", (1, 2, 10, 11, 100))
-@pytest.mark.parametrize("n_pusher", range(0, 5))
+@pytest.mark.parametrize("stride", (1, 2, 3, 7, 19))
+@pytest.mark.parametrize("cache_size", (1, 2, 3, 10, 11, 23, 100))
+@pytest.mark.parametrize("n_pusher", range(0, 8))
 def test_callback_unique_keys(n_pusher, cache_size, stride):
     """The necessary conditions being tested are, assuming that the collection
     of keys pushed by each pusher do not overlap with each other:
@@ -34,8 +34,9 @@ def test_callback_unique_keys(n_pusher, cache_size, stride):
         nonlocal cb_histogram
         cb_histogram[args[0]] += 1
         # The following line is the test: yielding explicitly in the callback.
-        # What this does is to clog up the purge queue -- don't do this in
-        # production code!
+        # What this does is to clog up the purge queue -- think before doing
+        # this in production code! This may work for coroutines but not for
+        # "normal" functions.
         gevent.sleep(0)
 
     cache = LRUDict(cache_size, callback=cb)

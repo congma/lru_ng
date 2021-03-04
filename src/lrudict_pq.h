@@ -14,9 +14,12 @@ struct _pq_sinfo {
 typedef struct _LRUDict_pq {
     struct _pq_sinfo sinfo;
     PyObject *lst;
-    unsigned int pending_requests;
+    unsigned short n_active;
+    unsigned short n_max;
 } LRUDict_pq;
 
+/* Hard-coded default n_max. */
+#define LRUPQ_N_MAX_DEFAULT 8192
 
 LRUDict_pq *
 lrupq_new(void);
