@@ -1339,6 +1339,55 @@ LRU__purge_queue_size_getter(LRUDict *self, void *closure)
 }
 
 
+static PyObject *
+LRU__max_pending_callbacks_getter(LRUDict *self, void *closure)
+{
+    (void)closure;
+    if (self->purge_queue) {
+        unsigned long ires = (unsigned long)(self->purge_queue->n_max);
+        return PyLong_FromUnsignedLong(ires);
+    }
+    else {
+        PyErr_SetString(PyExc_MemoryError, "purge queue pointer is NULL");
+        return NULL;
+    }
+}
+
+
+static int
+LRU__max_pending_callbacks_setter(LRUDict *self, PyObject *value,
+                                  void *closure)
+{
+    (void)closure;
+    if (value == NULL) {
+        PyErr_SetString(PyExc_AttributeError,
+                        "can't delete _max_pending_callbacks");
+        return -1;
+    }
+
+    if (self->purge_queue == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "purge queue pointer is NULL");
+        return -1;
+    }
+
+    Py_ssize_t ires = PyLong_AsSsize_t(value);
+
+    if (PyErr_Occurred()) {
+        return -1;
+    }
+
+    if (ires < 1 || ires > (Py_ssize_t)USHRT_MAX) {
+        PyErr_Format(PyExc_ValueError,
+                     "value must be between 1 and %u", USHRT_MAX);
+        return -1;
+    }
+    else {
+        self->purge_queue->n_max = (unsigned short)ires;
+        return 0;
+    }
+}
+
+
 /* Array of methods
  * Notice that just like Python's dict, the __contains__ and __getitem__
  * methods are explicitly added with METH_COEXIST, which makes them faster when
@@ -1421,6 +1470,11 @@ static PyGetSetDef LRU_descriptors[] = {
         (getter)LRU_callback_getter,
         (setter)LRU_callback_setter,
         PyDoc_STR("Callback object with the signature\n    callback(key, value)\nIf set to a callable, the (key, value) pair will be passed to it after evicted from the LRUDict. If set to None, disable the callback mechanism. Setting it to a non-callable object that is not None raises TypeError."),
+        NULL},
+    {"_max_pending_callbacks",
+        (getter)LRU__max_pending_callbacks_getter,
+        (setter)LRU__max_pending_callbacks_setter,
+        PyDoc_STR("Maximal number of callbacks allowed to be pending."),
         NULL},
     {"_suspend_purge",
         (getter)LRU__suspend_purge_getter,

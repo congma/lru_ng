@@ -428,6 +428,8 @@ class TestLRU(unittest.TestCase):
                 counter[key] = 1
 
         l = LRUDict(100, callback)
+        # Reduce GIL contention in I/O-bound threads.
+        l._max_pending_callbacks = 2
 
         def runner(*args):
             nonlocal l

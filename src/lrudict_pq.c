@@ -37,7 +37,8 @@ lrupq_new(void)
 
     q->lst = new_list;
     q->sinfo.head = q->sinfo.tail = 0;
-    q->pending_requests = 0;
+    q->n_max = (LRUPQ_N_MAX_DEFAULT);
+    q->n_active = 0;
     return q;
 }
 
@@ -48,7 +49,7 @@ lrupq_new(void)
 int
 lrupq_free(LRUDict_pq *q)
 {
-    if (q->pending_requests) {
+    if (q->n_active) {
         return -1;
     }
     else {
@@ -102,11 +103,17 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
     }
 
     /* Skip if too many pending.
-     * Notice that a larger limit increases the possibility of hitting
-     * recursion limit with a misbehaving callback, while a lower value
-     * makes the queue more likely to have stuck items (by not being purged as
-     * aggressively). */
-    if (q->pending_requests == UINT_MAX) {
+     * Notice that, on the one hand, a larger limit increases the possibility
+     * of hitting recursion limit with a misbehaving callback (a good thing),
+     * but also the chance of convoy effect on the GIL if multiple threads
+     * requests GIL release and re-acquisition in the (pending) callback. OTOH,
+     * a lower value makes the queue more likely to have stuck items (by not
+     * being purged as aggressively), and (somewhat counterintuitively) a
+     * runaway callback less likely to be stopped by the recursion limit
+     * (because the new calls return early). However, it prevents threads from
+     * thrashing heavily upon each other.
+     */
+    if (q->n_active >= q->n_max) {
         return 0;
     }
 
@@ -115,7 +122,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
 
     if (callback != NULL) {
         _Bool fail = 0;
-        q->pending_requests++;
+        q->n_active++;
         Py_INCREF(callback);
 
         for (Py_ssize_t i = batch.head; i < batch.tail; i++) {
@@ -160,7 +167,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
         }  /* end of "for item in batch" loop */
 
         Py_DECREF(callback);
-        q->pending_requests--;
+        q->n_active--;
         if (fail) {
             return -2;
         }
@@ -170,8 +177,8 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
      * no one else's working on the list.
      * The last one to leave the building turns off the lights (on behalf of
      * everyone). */
-    if (q->pending_requests == 0) {
-        q->pending_requests++;
+    if (q->n_active == 0) {
+        q->n_active++;
 
         /* Re-load current status. */
         batch = q->sinfo;
@@ -186,7 +193,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
             q->sinfo.head -= res;
             q->sinfo.tail -= res;
         }
-        q->pending_requests--;
+        q->n_active--;
     }
     else {
         res = 0;

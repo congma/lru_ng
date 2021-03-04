@@ -34,8 +34,9 @@ def test_callback_unique_keys(n_pusher, cache_size, stride):
         nonlocal cb_histogram
         cb_histogram[args[0]] += 1
         # The following line is the test: yielding explicitly in the callback.
-        # What this does is to clog up the purge queue -- don't do this in
-        # production code!
+        # What this does is to clog up the purge queue -- think before doing
+        # this in production code! This may work for coroutines but not for
+        # "normal" functions.
         gevent.sleep(0)
 
     cache = LRUDict(cache_size, callback=cb)
