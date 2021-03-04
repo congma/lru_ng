@@ -40,6 +40,7 @@ class participates in Python's cycle garbage collection.
    hits-and-misses
    compatibility
    thread-safety
+   reentrancy
    performance
 
 

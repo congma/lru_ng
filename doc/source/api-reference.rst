@@ -147,24 +147,24 @@ Methods emulating :class:`dict`
 
    :return: :data:`None`.
 
-.. py:method:: LRUDict.get(self, key, default=None, /)
+.. py:method:: LRUDict.get(self, key, default=None, /) -> Any
 
    If :code:`key` is in the :class:`LRUDict`, return the value associated with
    :code:`key` and increment the "hits" counter, if :code:`key` is in the
    object.  Otherwise, return the value of :code:`default` and increment the
    "missing" counter.
 
-.. py:method:: LRUDict.setdefault(self, key, default=None, /)
+.. py:method:: LRUDict.setdefault(self, key, default=None, /) -> Any
 
    If :code:`key` is in the :class:`LRUDict`, return the value associated with
    :code:`key` and increment the "hits" counter (just like the :meth:`get`
-   method).  Otherwise, return :code:`default` and *insert* the :code:`key`
-   with the value :code:`default`.
+   method).  Otherwise, return :code:`default`, *insert* the :code:`key`
+   with the value :code:`default`, and return :code:`default`.
 
    .. note:: Like Python's :meth:`dict.setdefault`, the hash function for
              :code:`key` is evaluated only once.
 
-.. py:method:: LRUDict.pop(self, key[, default], /)
+.. py:method:: LRUDict.pop(self, key[, default], /) -> Any
 
    If :code:`key` is in the :class:`LRUDict`, return its associated value,
    remove this *(key, value)* pair, and increment the "hits" counter. If
@@ -174,6 +174,7 @@ Methods emulating :class:`dict`
    counter is incremented as long as :code:`key` is not in the
    :class:`LRUDict`.
 
+   :return: *(key, value)* pair.
    :raises KeyError: if :code:`key` is not stored but :code:`default` is not
                      given.
 
@@ -181,20 +182,23 @@ Methods emulating :class:`dict`
 
    Return a pair (two-element tuple) *key, value* and remove it from the
    storage. If the :class:`LRUDict` object is empty (hence no item to pop),
-   raise :code:`KeyError`.
+   raise :exc:`KeyError`.
 
-   The item removed is the least-recently used one if the optional paramter
-   :code:`least_recent` is :data:`True`. Otherwise, the *most-recently* used
-   one is returned (which is the default behaviour).
+   By default, The item popped is the  *most-recently* used (MRU) one. If the
+   optional paramter :code:`least_recent` is :data:`True`, the *least-recently*
+   used (LRU) one is returned instead.
 
    This method does not modify the hits/misses counters.
 
    :param bool least_recent: Boolean flag indicating the order of popping.
-                             *Default:* :data:`False`
+                             *Default:* :data:`False` (popping the MRU)
    :return:                  *(key, value)* pair.
 
    .. note:: The optional argument :code:`least_recent` is specific to
-             :class:`LRUDict` and not present for :class:`dict`.
+             :class:`LRUDict` and not present for :class:`dict`. It bears some
+             similarity to Python's :meth:`collections.OrderedDict.popitem`,
+             and the default order (LIFO) is the same despite different
+             terminologies.
 
 .. py:method:: LRUDict.update(self[, other,] /, *, **kwargs) -> None
 
@@ -265,6 +269,7 @@ Methods specific to :class:`LRUDict`
    raise :exc:`KeyError` if the :class:`LRUDict` is empty. The hits/misses
    counters are not modified.
 
+   :return: *(key, value)* pair.
    :raises KeyError: if the :class:`LRUDict` is empty.
 
 .. py:method:: LRUDict.peek_last_item(self, /) -> Tuple[Object, Object]
@@ -273,6 +278,7 @@ Methods specific to :class:`LRUDict`
    raise :exc:`KeyError` if the :class:`LRUDict` is empty. The hits/misses
    counters are not modified.
 
+   :return: *(key, value)* pair.
    :raises KeyError: if the :class:`LRUDict` is empty.
 
 .. py:method:: LRUDict.get_stats(self, /) -> Tuple[int, int]
@@ -290,7 +296,7 @@ Methods specific to :class:`LRUDict`
 
    .. warning:: The numerical values are stored as C :code:`unsigned long`
                 internally and may wrap around to zero if overflown, although
-                this unlikely.
+                this seems unlikely.
 
 
 Other special methods
@@ -332,6 +338,12 @@ Less-common and experimental methods
 
    Peek the length of the purge buffer. The value is indicative only and may
    not be accurate in a threaded environment.
+
+.. py:method:: LRUDict._max_pending_callbacks
+   :property:
+
+   The maximum number of callbacks allowed to be pending on the purge queue.
+   Must be an integer between 1 and C :code:`USHRT_MAX` (typically 65535).
 
 .. py:method:: LRUDict._detect_conflict
    :property:

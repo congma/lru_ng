@@ -31,7 +31,8 @@ Differences from :code:`lru.LRU` 1.1.7
 **************************************
 
 * Name of the class has changed to :code:`LRUDict` (because the acronym "LRU"
-  is better reserved as the name of an *algorithm*).
+  is better reserved as an adjective or a description of the particular
+  replacement policy).
 * Python 2.7 support is removed. Instead, CPython 3.6+ is now required.
 * The :meth:`~LRUDict.get_size`, :meth:`~LRUDict.set_size`, and
   :meth:`~LRUDict.set_callback` methods are obsoleted. To resize or change the
@@ -73,25 +74,34 @@ behaviours in more subtle ways.
   key attempt to modify the :class:`LRUDict` object inside a method call, the
   code will attempt to detect this and raise an :exc:`LRUDictBusyError`
   exception.
-* Overall behaviour in Python threads is now more predictable and safer. Even
-  if a callback releases the GIL, the internal state remains consistent.  There
-  is limited ability to detect conflicting access at runtime; see
-  :ref:`thread-safety:thread safety` for more.
+* Overall behaviour in Python threads or other execution units (such as
+  :term:`coroutines <coroutine>` or `greenlets
+  <https://greenlet.readthedocs.io/en/latest/>`_) is now more predictable and
+  safer. Even if a callback releases the GIL, the internal state remains
+  consistent.  There is limited ability to detect conflicting access at
+  runtime; see :ref:`thread-safety:thread safety` for more.
 
 
-Comparison with Python :class:`dict`
-************************************
+Comparison with Python :class:`dict` or :class:`~collections.OrderedDict`
+*************************************************************************
 
 :class:`LRUDict` attempts to emulate Python built-in :class:`dict` in
 :ref:`API <dict-emulation>` and behaviour (when sensible). However, currently
 returning an iterable proxy by :meth:`~dict.keys`, :meth:`~dict.values`, and
-:meth:`~dict.items` are among the unsupported methods.
+:meth:`~dict.items` are among the unsupported methods. The reason is that the
+internal ordering of keys is volatile, and an iterator honouring the ordering
+is very easily invalidated, thus limiting its use.
 
 A :class:`dict` maintains *key-insertion order* (since CPython 3.6+), which is
 not the same as key-use order in the LRU sense: a :ref:`hit
 <hits-and-misses:hits and misses>` promotes the key to the highest priority but
 does not necessarily change the insertion order (unless it is removed and
 inserted again).
+
+Python offers another mapping type, :class:`collections.OrderedDict`, which
+bear some similarity to :class:`LRUDict`. The major difference is that
+:class:`LRUDict` is focused on bounded size and eviction callback while the
+former is a more flexible mapping type.
 
 
 Comparison with Python :func:`functools.lru_cache`
@@ -105,9 +115,9 @@ This module, however, provides a container/mapping class, and a memoizing LRU
 decorator can be built on top of it (although not as fast as the native one,
 because the latter implements more optimizations and also avoids a lot of
 overhead of handling Python calls or exceptions).  Instead, this module focuses
-on :class:`dict`-compatibility and the ability to
-set a callback.
+on :class:`dict`-compatibility and the ability to set a callback.
 
 Also, unlike :func:`functools.lru_cache`, there is no default size limit at
 initialization: a value must be provided by the user. Unbound size is not
-supported, either: there must be a size bound.
+supported, either: the size bound must be explicit (although ultimately
+hard-limited by the platform's :data:`sys.maxsize`).
