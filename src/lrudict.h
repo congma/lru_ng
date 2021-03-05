@@ -5,7 +5,7 @@
 #include "Python.h"
 #include "lrudict_pq.h"
 
-#if (defined __GNUC__) || (defined __clang__)
+#if (defined __GNUC__) || (defined __clang__) || (defined __INTEL_COMPILER)
 #define likely(p)     __builtin_expect(!!(p), 1)
 #define unlikely(p)   __builtin_expect(!!(p), 0)
 #else
@@ -46,10 +46,31 @@ typedef struct _LRUDict {
     Py_ssize_t size;
     unsigned long hits;
     unsigned long misses;
+    _Bool _pb;
     _Bool internal_busy:1;
     _Bool detect_conflict:1;
     _Bool purge_suspended:1;
 } LRUDict;
+
+
+/* Forward declarations */
+typedef Py_ssize_t (*dict_lookup_func)
+(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **value_addr);
+
+
+struct _dictkeysobject {
+    Py_ssize_t dk_refcnt;
+    Py_ssize_t dk_size;
+    dict_lookup_func dk_lookup;
+    Py_ssize_t dk_usable;
+    Py_ssize_t dk_nentries;
+    char dk_indices[];
+};
+
+
+#ifndef DKIX_ERROR
+#define DKIX_ERROR ((Py_ssize_t)(-3))
+#endif
 
 
 #endif
