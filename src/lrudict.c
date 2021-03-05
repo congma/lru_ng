@@ -71,8 +71,8 @@ static PyTypeObject NodeType = {
 do {                            \
     Py_INCREF((_k));            \
     Py_INCREF((_v));            \
-    (_node)->value = (_v);      \
     (_node)->key = (_k);        \
+    (_node)->value = (_v);      \
     (_node)->key_hash = (_kh);  \
 } while (0)
 
@@ -179,7 +179,7 @@ static inline void
 lru_delete_last_impl(LRUDict *self)
 {
     Node *n = self->last;
-    if (n == NULL) {
+    if (unlikely(n == NULL)) {
         return;
     }
 
@@ -481,7 +481,8 @@ get_hash(PyObject *k)
 {
     Py_hash_t hash;
 
-    if (!PyUnicode_CheckExact(k) || (hash = ((PyASCIIObject *)k)->hash) == -1)
+    if (!PyUnicode_CheckExact(k) ||
+        unlikely((hash = ((PyASCIIObject *)k)->hash) == -1))
     {
         hash = PyObject_Hash(k);
     }
@@ -691,7 +692,7 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
     int res;
     Py_hash_t kh;
 
-    if ((kh = get_hash(key)) == -1) {
+    if (unlikely((kh = get_hash(key)) == -1)) {
         return -1;
     }
 
@@ -1067,7 +1068,7 @@ LRU_setdefault(LRUDict *self, PyObject *args)
     }
     assert(key != NULL);
     assert(default_obj != NULL);
-    if ((kh = get_hash(key)) == -1) {
+    if (unlikely((kh = get_hash(key)) == -1)) {
         return NULL;
     }
 
@@ -1713,16 +1714,18 @@ LRU_fini(LRUDict *self)
  * only be found as values in self->dict or items in self->purge_queue->lst,
  * and it cannot be shared by different dicts. When doing the traverse we
  * already know where to visit, and we directly visit the Node's Python-object
- * members (which it owns). The visitations honour breadth-first traversal
- * partially, by first visiting node values (most likely place to form cycles),
- * then purge queue (usually short), followed by node keys, and finally the
- * callback object. */
+ * members (which it owns). The visitations go through the node items (most
+ * likely place to form cycles), node keys, then purge queue (usually short),
+ * and finally the callback object. (NOTE: cycles are rare, and we fuse the
+ * loops over node->key and node->value since the loops are likely to be
+ * exhausted rather than early-returned. ) */
 static int
 LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 {
     Node *cur = self->last;
 
     while (cur) {
+        Py_VISIT(cur->key);
         Py_VISIT(cur->value);
         cur = cur->prev;
     }
@@ -1736,12 +1739,6 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
                 Py_VISIT(cur->key);
             }
         }
-    }
-
-    cur = self->last;
-    while (cur) {
-        Py_VISIT(cur->key);
-        cur = cur->prev;
     }
 
     if (self->callback) {
