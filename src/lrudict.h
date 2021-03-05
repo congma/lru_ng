@@ -54,8 +54,14 @@ typedef struct _LRUDict {
 
 
 /* Forward declarations */
+#if PY_VERSION_HEX >= 0x03070000
 typedef Py_ssize_t (*dict_lookup_func)
 (PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **value_addr);
+#else
+typedef Py_ssize_t (*dict_lookup_func)
+(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject ***value_addr,
+ Py_ssize_t *hashpos);
+#endif
 
 
 struct _dictkeysobject {

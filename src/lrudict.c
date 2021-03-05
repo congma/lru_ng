@@ -495,7 +495,12 @@ direct_lookup(PyObject *restrict d, PyObject *restrict key, Py_hash_t kh,
               Node **node_ref)
 {
     PyDictObject *mp = (PyDictObject *)d;
+#if PY_VERSION_HEX >= 0x03070000
     return (mp->ma_keys->dk_lookup)(mp, key, kh, (PyObject **)node_ref);
+#else
+    return (mp->ma_keys->dk_lookup)(mp, key, kh, (PyObject ***)&node_ref,
+            NULL);
+#endif
 }
 
 
