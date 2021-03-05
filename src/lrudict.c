@@ -498,8 +498,16 @@ direct_lookup(PyObject *restrict d, PyObject *restrict key, Py_hash_t kh,
 #if PY_VERSION_HEX >= 0x03070000
     return (mp->ma_keys->dk_lookup)(mp, key, kh, (PyObject **)node_ref);
 #else
-    return (mp->ma_keys->dk_lookup)(mp, key, kh, (PyObject ***)&node_ref,
-            NULL);
+    PyObject **vaddr;
+    Py_ssize_t index;
+    index = (mp->ma_keys->dk_lookup)(mp, key, kh, &vaddr, NULL);
+    if (index >= 0 && vaddr) {
+        *node_ref = (Node *)(*vaddr);
+    }
+    else {
+        *node_ref = NULL;
+    }
+    return index;
 #endif
 }
 
