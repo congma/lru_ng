@@ -2,7 +2,6 @@
 #include "Python.h"
 #include "lrudict_pq.h"
 #include "lrudict.h" /* For Node */
-#include <limits.h>
 
 
 /* Internal function: check exception, write a message to unraisable hook, and
@@ -10,7 +9,7 @@
 static inline void
 lrupurge_unraise(PyObject *obj)
 {
-    if (PyErr_Occurred()) {
+    if (likely(PyErr_Occurred())) {
         PyErr_WriteUnraisable(obj);
         PyErr_Clear();
     }
@@ -131,14 +130,14 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
             /* Borrow reference from list. */
             n = (Node *)PyList_GetItem(q->lst, i);
 
-            if (n == NULL) {
+            if (unlikely(n == NULL)) {
                 lrupurge_unraise(q->lst);
                 continue;
             }
 
             cres = PyObject_CallFunctionObjArgs(callback, n->key, n->value,
                                                 NULL);
-            if (cres != NULL) {
+            if (likely(cres != NULL)) {
                 /* Discard return value of callback. */
                 Py_DECREF(cres);
                 continue;
@@ -149,7 +148,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
              * explicitly. */
             {
                 PyObject *exc = PyErr_Occurred();
-                if (exc) {
+                if (likely(exc)) {
                     if (lrupq_err_bad(exc)) {
                         /* External exception that needs the attention of
                          * interpreter: do not suppress. Instead, abandon,
@@ -183,7 +182,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
         /* Re-load current status. */
         batch = q->sinfo;
 
-        if (PyList_SetSlice(q->lst, 0, batch.head, NULL) == -1) {
+        if (unlikely(PyList_SetSlice(q->lst, 0, batch.head, NULL) == -1)) {
             lrupurge_unraise(q->lst);
             res = -1;
         }

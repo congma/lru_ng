@@ -5,6 +5,14 @@
 #include "Python.h"
 #include "lrudict_pq.h"
 
+#if (defined __GNUC__) || (defined __clang__)
+#define likely(p)     __builtin_expect(!!(p), 1)
+#define unlikely(p)   __builtin_expect(!!(p), 0)
+#else
+#define likely(p)     (p)
+#define unlikely(p)   (p)
+#endif
+
 /* Programming support for manual/forced purging control */
 typedef enum {
     NO_FORCE_PURGE = 0,

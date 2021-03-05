@@ -82,7 +82,8 @@ do {                            \
  * sequence is only used in Python-facing methods and nowhere else */
 #define LRU_ENTER_CRIT(self, failresult)    \
 do {                                        \
-    if ((self)->detect_conflict && (self)->internal_busy) {  \
+    if (likely((self)->detect_conflict) && unlikely((self)->internal_busy)) \
+    {  \
         PyErr_SetString(LRUDictExc_BusyErr, \
                 "attempted entry into LRUDict critical section while busy");\
         return (failresult);    \
@@ -96,8 +97,8 @@ do {                            \
     (self)->internal_busy = 0;  \
 } while (0)
 
-#define PURGE_BUT_FAIL(self)  \
-    (lru_purge_staging_impl((self), NO_FORCE_PURGE) == -2)
+#define PURGE_MAYBE_FAIL(self)  \
+    (unlikely(lru_purge_staging_impl((self), NO_FORCE_PURGE) == -2))
 
 
 /* Linked-list data-structure implementations internal to LRUDict */
@@ -164,12 +165,12 @@ lru_decref_unsafe(const PyObject *obj)
 static inline int
 lrupq_push(LRUDict_pq *q, PyObject *obj)
 {
-    if (PyList_Append(q->lst, obj) != -1) {
-        q->sinfo.tail++;
-        return 0;
+    if (unlikely(PyList_Append(q->lst, obj) == -1)) {
+        return -1;
     }
     else {
-        return -1;
+        q->sinfo.tail++;
+        return 0;
     }
 }
 
@@ -188,7 +189,9 @@ lru_delete_last_impl(LRUDict *self)
      * here, because as we DECREF the last reference to the node, it's possible
      * to trigger arbitrary code in the Node's key or value's __del__.*/
     Py_INCREF(n);
-    if (_PyDict_DelItem_KnownHash(self->dict, n->key, n->key_hash) == 0) {
+    if (likely(_PyDict_DelItem_KnownHash(self->dict,
+                                         n->key, n->key_hash) == 0))
+    {
         lru_remove_node_impl(self, n);
         /* The list will increase the refcount to the node if successful */
         if (self->callback ||
@@ -293,7 +296,7 @@ LRU_size_setter(LRUDict *self, PyObject *value, void *closure)
     status = lru_set_size_impl(self, newsize);
     LRU_LEAVE_CRIT(self);
 
-    if (PURGE_BUT_FAIL(self)) {
+    if (PURGE_MAYBE_FAIL(self)) {
         return -1;
     }
 
@@ -315,7 +318,7 @@ LRU_set_size_legacy(LRUDict *self, PyObject *args)
     status = lru_set_size_impl(self, newsize);
     LRU_LEAVE_CRIT(self);
 
-    if (PURGE_BUT_FAIL(self)) {
+    if (PURGE_MAYBE_FAIL(self)) {
         return NULL;
     }
 
@@ -488,7 +491,7 @@ LRU_subscript(LRUDict *self, PyObject *key)
     LRU_LEAVE_CRIT(self);
 
     if (result == NULL) {
-        if (!PyErr_Occurred()) {
+        if (likely(!PyErr_Occurred())) {
             _PyErr_SetKeyError(key);
         }
     }
@@ -529,14 +532,14 @@ lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh,
     int res;
     *node_ref = (Node *)_PyDict_GetItem_KnownHash(self->dict, key, kh);
     if (*node_ref == NULL) {
-        if (!PyErr_Occurred()) {
+        if (likely(!PyErr_Occurred())) {
             _PyErr_SetKeyError(key);
         }
         return -1;
     }
     Py_INCREF(*node_ref);
     res = _PyDict_DelItem_KnownHash(self->dict, key, kh);
-    if (res == 0) {
+    if (likely(res == 0)) {
         /* If dict item-deletion succeed, detach from queue and keep this ref
          * for the output parameter. */
         lru_remove_node_impl(self, *node_ref);
@@ -561,7 +564,7 @@ lru_insert_new_node_impl(LRUDict *self, Node *node)
                                     node->key,
                                     (PyObject *)node,
                                     node->key_hash);
-    if (res == 0) {
+    if (likely(res == 0)) {
         lru_add_node_at_head_impl(self, node);
     }
     if (lru_length_impl(self) > self->size) {
@@ -596,13 +599,13 @@ lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
     node_ref = (Node *)_PyDict_GetItem_KnownHash(self->dict, key, kh);
 
     if (node_ref == NULL) {
-        if (PyErr_Occurred()) {
+        if (unlikely(PyErr_Occurred())) {
             return -1;
         }
 
         /* inserting new key */
         Node *val_node = PyObject_New(Node, &NodeType);
-        if (val_node == NULL) {
+        if (unlikely(val_node == NULL)) {
             return -1;
         }
         /* populate new node; this INCREF the key and value. */
@@ -656,7 +659,7 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
         LRU_ENTER_CRIT(self, -1);
         res = lru_popnode_impl(self, key, kh, &popped_node);
         LRU_LEAVE_CRIT(self);
-        if (res == 0) {
+        if (likely(res == 0)) {
             Py_DECREF(popped_node);
         }
         return res;
@@ -675,8 +678,8 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
             }
             else {
                 /* Inserted value */
-                if (PURGE_BUT_FAIL(self)) {
-                    return -1;
+                if (PURGE_MAYBE_FAIL(self)) {
+                    res = -1;
                 }
             }
         }
@@ -717,7 +720,7 @@ collect(LRUDict *self, PyObject * (*getterfunc)(const Node *restrict))
     while (curr != NULL) {
         PyObject * obj;
 
-        if ((obj = getterfunc(curr)) != NULL) {
+        if (likely((obj = getterfunc(curr)) != NULL)) {
             PyList_SET_ITEM(v, i++, obj);
             curr = curr->next;
         }
@@ -858,12 +861,12 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src,
         PyObject **restrict cur = updbuf->buf + i;
 
         if (PyDict_Next(src, &updbuf->pos, &key, &value)) {
-            if ((kh = get_hash(key)) == -1) {
+            if (unlikely((kh = get_hash(key)) == -1)) {
                 ret_status = -1;
                 break;
             }
             push_status = lru_push_impl(self, key, value, kh, cur);
-            if (push_status != 0) {
+            if (unlikely(push_status != 0)) {
                 ret_status = -1;
                 break;
             }
@@ -900,7 +903,7 @@ lru_update_with(LRUDict *self, PyObject *other, update_buf_t *restrict updbuf)
     do {
         int status;
 
-        if (self->detect_conflict && self->internal_busy)
+        if (likely(self->detect_conflict) && unlikely(self->internal_busy))
         {
             PyErr_SetString(LRUDictExc_BusyErr,
                             "attempted entry into LRUDict critical section"
@@ -913,7 +916,7 @@ lru_update_with(LRUDict *self, PyObject *other, update_buf_t *restrict updbuf)
 
         status = lru_update_fill_buffer(self, other, updbuf);
 
-        if (status == -1) {
+        if (unlikely(status == -1)) {
             fail = 1;
             leave = 1;
         }
@@ -972,7 +975,7 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
         .len = LRU_BATCH_MAX,
         .buf = PyMem_Malloc(LRU_BATCH_MAX * sizeof(PyObject *)),
     };
-    if (updbuf.buf == NULL) {
+    if (unlikely(updbuf.buf == NULL)) {
         return PyErr_NoMemory();
     }
 
@@ -994,7 +997,7 @@ LRU_update(LRUDict *self, PyObject *args, PyObject *kwargs)
     res = Py_None;
 cleanup:
     PyMem_Free(updbuf.buf);
-    if (PURGE_BUT_FAIL(self)) {
+    if (PURGE_MAYBE_FAIL(self)) {
         res = NULL;
     }
     Py_XINCREF(res);
@@ -1029,13 +1032,13 @@ LRU_setdefault(LRUDict *self, PyObject *args)
     /* XXX: use a less nesty style */
     if (ret_node == NULL) {
         /* Error or key not in */
-        if (PyErr_Occurred()) { /* GetItem internal error */
+        if (unlikely(PyErr_Occurred())) { /* GetItem internal error */
             LRU_LEAVE_CRIT(self);
             return NULL;
         }
         /* key not in, this is not a miss, pack default_obj and insert */
         Node *default_node = PyObject_New(Node, &NodeType);
-        if (default_node == NULL) {
+        if (unlikely(default_node == NULL)) {
             LRU_LEAVE_CRIT(self);
             return NULL;
         }
@@ -1045,7 +1048,7 @@ LRU_setdefault(LRUDict *self, PyObject *args)
         /* This INCREF's the key and default_obj */
         NODE_INIT(default_node, key, default_obj, kh);
         status = lru_insert_new_node_impl(self, default_node);
-        if (status == 0) {
+        if (likely(status == 0)) {
             /* Return new ref (this is in addition to the new ref owned by the
              * node. */
             Py_INCREF(default_obj);
@@ -1064,7 +1067,7 @@ LRU_setdefault(LRUDict *self, PyObject *args)
     }         /* end test if (ret_node == NULL) */
     LRU_LEAVE_CRIT(self);
 
-    if (PURGE_BUT_FAIL(self)) {
+    if (PURGE_MAYBE_FAIL(self)) {
         Py_XDECREF(res);
         res = NULL;
     }
@@ -1143,7 +1146,8 @@ LRU_popitem(LRUDict *self, PyObject *args)
     }
 
     Py_INCREF(node);
-    if (_PyDict_DelItem_KnownHash(self->dict, node->key, node->key_hash) == 0)
+    if (likely(_PyDict_DelItem_KnownHash(self->dict,
+                                         node->key, node->key_hash) == 0))
     {
         lru_remove_node_impl(self, node);
     }
@@ -1237,14 +1241,14 @@ LRU_to_dict(LRUDict *self, PyObject *Py_UNUSED(ignored))
     LRU_ENTER_CRIT(self, NULL);
     while (n != NULL) {
         status = _PyDict_SetItem_KnownHash(dst, n->key, n->value, n->key_hash);
-        if (status == -1) {
+        if (unlikely(status == -1)) {
             break;
         }
         n = n->prev;
     }
     LRU_LEAVE_CRIT(self);
 
-    if (status == -1) {
+    if (unlikely(status == -1)) {
         Py_DECREF(dst);
         return NULL;
     }
@@ -1297,7 +1301,7 @@ static PyObject *
 LRU_purge(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     Py_ssize_t status = lru_purge_staging_impl(self, FORCE_PURGE);
-    return status == -2 ? NULL : PyLong_FromSsize_t(status);
+    return unlikely(status == -2) ? NULL : PyLong_FromSsize_t(status);
 }
 
 
@@ -1498,7 +1502,7 @@ static PyGetSetDef LRU_descriptors[] = {
 #define GETREPR_TRY_EXCEPT(namevar, callexpr, checkexpr, action_statement)  \
 do {                              \
     (namevar) = (callexpr);       \
-    if ((namevar) != NULL) {      \
+    if (likely((namevar) != NULL)) {      \
         if ((checkexpr)) {        \
             action_statement;     \
         }                         \
@@ -1563,7 +1567,7 @@ LRU_repr(LRUDict *self)
     PyObject *self_repr;
     /* repr of dict doesn't have to be very long, it's not like you can
      * literally eval the repr of self anyway */
-    if (self->dict == NULL) {
+    if (unlikely(self->dict == NULL)) {
         dict_repr = PyUnicode_FromString("<error>");
     }
     else {
