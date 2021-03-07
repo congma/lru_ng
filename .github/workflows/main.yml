@@ -21,19 +21,19 @@ jobs:
 
     - name: Install dependencies (system repo)
       run: |
-        sudo apt-get install -y --no-install-recommends python-dev
-        python -m pip install --upgrade pip setuptools pytest yagot gevent
-        python -m pip install git+https://github.com/congma/trackrefcount.git#egg=trackrefcount
+        sudo apt-get install -y --no-install-recommends python3.8-dev
+        python3.8 -m pip install --upgrade pip setuptools pytest yagot gevent
+        python3.8 -m pip install git+https://github.com/congma/trackrefcount.git#egg=trackrefcount
 
     - name: Compile and install (Debug)
       run: |
         export CC="${CC} -O0 -UNDEBUG"
         export CFLAGS="-W -Wall -Wextra -Wstrict-aliasing -std=c11 -pedantic -O0 -UNDEBUG"
-        python setup.py bdist_wheel
-        python -m pip install dist/lru_ng*.whl
+        python3.8 setup.py bdist_wheel
+        python3.8 -m pip install dist/lru_ng*.whl
 
     - name: Execute pytest (Debug)
-      run: python -m pytest
+      run: python3.8 -m pytest
 
   build-and-test-with-pythons-on-focal:
     name: Build and Test on Ubuntu 20
