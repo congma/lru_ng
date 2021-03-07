@@ -2,7 +2,6 @@
 #include "Python.h"
 #include "lrudict_pq.h"
 #include "lrudict.h" /* For Node */
-#include <limits.h>
 
 
 /* Internal function: check exception, write a message to unraisable hook, and
@@ -10,7 +9,7 @@
 static inline void
 lrupurge_unraise(PyObject *obj)
 {
-    if (PyErr_Occurred()) {
+    if (likely(PyErr_Occurred())) {
         PyErr_WriteUnraisable(obj);
         PyErr_Clear();
     }
@@ -45,18 +44,17 @@ lrupq_new(void)
 
 /* DECREF the underlying list and free the memory space of the purge-queue
  * struct. Return 0 on success or -1 on error (typically because somehow a
- * callback cannot leave the purging procedure). */
+ * callback cannot leave the purging procedure). Since each pass on the list
+ * temporarily INCREF's the list itself, this will only drop the ref owned
+ * on behalf of the owing LRUDict object. */
 int
 lrupq_free(LRUDict_pq *q)
 {
-    if (q->n_active) {
-        return -1;
-    }
-    else {
-        Py_CLEAR(q->lst);
-        PyMem_Free(q);
-        return 0;
-    }
+    int status = q->n_active > 0 ? -1 : 0;
+
+    Py_CLEAR(q->lst);
+    PyMem_Free(q);
+    return status;
 }
 
 
@@ -123,6 +121,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
     if (callback != NULL) {
         _Bool fail = 0;
         q->n_active++;
+        Py_INCREF(q->lst);
         Py_INCREF(callback);
 
         for (Py_ssize_t i = batch.head; i < batch.tail; i++) {
@@ -131,14 +130,14 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
             /* Borrow reference from list. */
             n = (Node *)PyList_GetItem(q->lst, i);
 
-            if (n == NULL) {
+            if (unlikely(n == NULL)) {
                 lrupurge_unraise(q->lst);
                 continue;
             }
 
             cres = PyObject_CallFunctionObjArgs(callback, n->key, n->value,
                                                 NULL);
-            if (cres != NULL) {
+            if (likely(cres != NULL)) {
                 /* Discard return value of callback. */
                 Py_DECREF(cres);
                 continue;
@@ -149,7 +148,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
              * explicitly. */
             {
                 PyObject *exc = PyErr_Occurred();
-                if (exc) {
+                if (likely(exc)) {
                     if (lrupq_err_bad(exc)) {
                         /* External exception that needs the attention of
                          * interpreter: do not suppress. Instead, abandon,
@@ -167,6 +166,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
         }  /* end of "for item in batch" loop */
 
         Py_DECREF(callback);
+        Py_DECREF(q->lst);
         q->n_active--;
         if (fail) {
             return -2;
@@ -183,7 +183,8 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
         /* Re-load current status. */
         batch = q->sinfo;
 
-        if (PyList_SetSlice(q->lst, 0, batch.head, NULL) == -1) {
+        Py_INCREF(q->lst);
+        if (unlikely(PyList_SetSlice(q->lst, 0, batch.head, NULL) == -1)) {
             lrupurge_unraise(q->lst);
             res = -1;
         }
@@ -194,6 +195,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
             q->sinfo.tail -= res;
         }
         q->n_active--;
+        Py_DECREF(q->lst);
     }
     else {
         res = 0;
