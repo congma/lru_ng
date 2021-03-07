@@ -27,7 +27,7 @@ jobs:
 
     - name: Compile and install (Debug)
       run: |
-        export CC="${CC} -O0 -UNDEBUG"
+        export CC="gcc -O0 -UNDEBUG"
         export CFLAGS="-W -Wall -Wextra -Wstrict-aliasing -std=c11 -pedantic -O0 -UNDEBUG"
         python3.8 setup.py bdist_wheel
         python3.8 -m pip install dist/lru_ng*.whl
