@@ -289,10 +289,8 @@ LRU_length(LRUDict *self)
 
 /* Size (capacity) property access, validation, and setting (re-sizing) */
 static PyObject *
-LRU_size_getter(LRUDict *self, void *closure)
+LRU_size_getter(LRUDict *self, void *Py_UNUSED(closure))
 {
-    (void)closure;
-
     return PyLong_FromSsize_t(self->size);
 }
 
@@ -323,12 +321,10 @@ lru_set_size_impl(LRUDict *self, Py_ssize_t newsize)
 
 /* Descriptor setter function for size */
 static int
-LRU_size_setter(LRUDict *self, PyObject *value, void *closure)
+LRU_size_setter(LRUDict *self, PyObject *value, void *Py_UNUSED(closure))
 {
     int status;
     Py_ssize_t newsize;
-
-    (void)closure;
 
     if (value == NULL) {
         PyErr_SetString(PyExc_AttributeError, "can't delete size");
@@ -384,10 +380,8 @@ LRU_set_size_legacy(LRUDict *self, PyObject *args)
 
 /* Callback property: accessing, validation, and setting */
 static PyObject *
-LRU_callback_getter(LRUDict *self, void *closure)
+LRU_callback_getter(LRUDict *self, void *Py_UNUSED(closure))
 {
-    (void)closure;
-
     if (self->callback == NULL) {
         Py_RETURN_NONE;
     }
@@ -426,11 +420,9 @@ lru_set_callback_impl(LRUDict *self, PyObject *value_obj)
 
 
 static int
-LRU_callback_setter(LRUDict *self, PyObject *value, void *closure)
+LRU_callback_setter(LRUDict *self, PyObject *value, void *Py_UNUSED(closure))
 {
     int status;
-
-    (void)closure;
 
     LRU_ENTER_CRIT(self, -1);
     status = lru_set_callback_impl(self, value);
@@ -911,6 +903,7 @@ LRU_get(LRUDict *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "O|O:get", &key, &default_obj)) {
         return NULL;
     }
+    assert(key != NULL);
     assert(default_obj != NULL);
 
     /* Subscripting changes the order of nodes, must protect. */
@@ -1192,11 +1185,11 @@ LRU_pop(LRUDict *self, PyObject *args)
 
     if (ret_node) {
         /* ret_node != NULL, delete it, unbox, and return value */
-        self->hits++;
+        /* lru_hit_impl will do a promotion; don't use it. */
         lru_detach_node(self, ret_node);
         Py_INCREF(ret_node->value);
-
         result = ret_node->value;
+        self->hits++;
 
         LRU_LEAVE_CRIT(self);
 
@@ -1403,20 +1396,20 @@ LRU_purge(LRUDict *self, PyObject *Py_UNUSED(ignored))
 }
 
 
-#define MAP_BITFIELD(field, property)                   \
-static PyObject *                                       \
-LRU_##property##_getter(LRUDict *self, void *closure)   \
-{(void)closure; if (self->field) {Py_RETURN_TRUE;} else {Py_RETURN_FALSE;}}\
-static int                                              \
-LRU_##property##_setter(LRUDict *self, PyObject *value, void *closure)  \
-{   int v; (void)closure;                       \
+#define MAP_BITFIELD(field, prop)                   \
+static PyObject *                                   \
+LRU_##prop##_getter(LRUDict *self, void *Py_UNUSED(closure))   \
+{if (self->field) {Py_RETURN_TRUE;} else {Py_RETURN_FALSE;}}   \
+static int                                          \
+LRU_##prop##_setter(LRUDict *self, PyObject *value, void *Py_UNUSED(closure))\
+{   int v;                                      \
     if (value == NULL) {                        \
-        PyErr_SetString(PyExc_AttributeError, "can't delete "#property);\
+        PyErr_SetString(PyExc_AttributeError, "can't delete "#prop);\
         return -1;                              \
     }                                           \
     if ((v = PyObject_IsTrue(value)) == -1) {   \
         PyErr_SetString(PyExc_ValueError,       \
-                #property" flag must evaluate to True or False");\
+                #prop" flag must evaluate to True or False");\
         return -1;                              \
     }                                           \
     self->field = v;                            \
@@ -1430,10 +1423,9 @@ MAP_BITFIELD(detect_conflict, _detect_conflict)
 
 
 static PyObject *
-LRU__purge_queue_size_getter(LRUDict *self, void *closure)
+LRU__purge_queue_size_getter(LRUDict *self, void *Py_UNUSED(closure))
 {
     Py_ssize_t len = 0;
-    (void)closure;
     if (self->purge_queue) {
         len = self->purge_queue->sinfo.tail;
     }
@@ -1442,9 +1434,8 @@ LRU__purge_queue_size_getter(LRUDict *self, void *closure)
 
 
 static PyObject *
-LRU__max_pending_callbacks_getter(LRUDict *self, void *closure)
+LRU__max_pending_callbacks_getter(LRUDict *self, void *Py_UNUSED(closure))
 {
-    (void)closure;
     if (self->purge_queue) {
         unsigned long ires = (unsigned long)(self->purge_queue->n_max);
         return PyLong_FromUnsignedLong(ires);
@@ -1458,9 +1449,8 @@ LRU__max_pending_callbacks_getter(LRUDict *self, void *closure)
 
 static int
 LRU__max_pending_callbacks_setter(LRUDict *self, PyObject *value,
-                                  void *closure)
+                                  void *Py_UNUSED(closure))
 {
-    (void)closure;
     if (value == NULL) {
         PyErr_SetString(PyExc_AttributeError,
                         "can't delete _max_pending_callbacks");
