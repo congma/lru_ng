@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include "Python.h"
+#include <assert.h>
 #include "lrudict.h"
 #include "lrudict_pq.h"
 #include "lrudict_exctype.h"
