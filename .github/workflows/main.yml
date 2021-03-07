@@ -10,6 +10,31 @@ on:
 
 
 jobs:
+  build-and-test-debug-assertions:
+    name: Build and Test on Ubuntu 20 (Debug assertions)
+    runs-on: ubuntu-20.04
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Python repository (system repo)
+      run: sudo apt-get update
+
+    - name: Install dependencies (system repo)
+      run: |
+        sudo apt-get install -y --no-install-recommends python-dev
+        python -m pip install --upgrade pip setuptools pytest yagot gevent
+        python -m pip install git+https://github.com/congma/trackrefcount.git#egg=trackrefcount
+
+    - name: Compile and install (Debug)
+      run: |
+        export CC="${CC} -O0 -UNDEBUG"
+        export CFLAGS="-W -Wall -Wextra -Wstrict-aliasing -std=c11 -pedantic -O0 -UNDEBUG"
+        python setup.py bdist_wheel
+        python -m pip install dist/lru_ng*.whl
+
+    - name: Execute pytest (Debug)
+      run: python -m pytest
+
   build-and-test-with-pythons-on-focal:
     name: Build and Test on Ubuntu 20
     runs-on: ubuntu-20.04
