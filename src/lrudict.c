@@ -576,6 +576,7 @@ lru_subscript_impl(LRUDict *self, PyObject *key, PyObject **value)
     else {
         /* The "overt" dict is never a split table, hence index >= 0 implies
          * that n != NULL, hence can be dereferenced. */
+        assert(n != NULL);
         *value = lru_hit_impl(self, n);
     }
     return 0;
@@ -614,8 +615,7 @@ LRU_subscript(LRUDict *self, PyObject *key)
  * In the case of failure, (return value == -1), the output parameter is
  * unusable, the queue is not modified, and the exception is set. */
 static inline int
-lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh,
-                 Node **node_ref)
+lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh, Node **node_ref)
 {
     /* identify the node to pop by borrowing a ref by key-keyhash. if not, set
      * exception. */
@@ -633,6 +633,7 @@ lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh,
         return -1;
     }
 
+    assert(node_ref != NULL);
     Py_INCREF(*node_ref);
     res = _PyDict_DelItem_KnownHash(self->dict, key, kh);
     if (likely(res == 0)) {
@@ -656,6 +657,7 @@ lru_insert_new_node_impl(LRUDict *self, Node *node)
 {
     int res;
 
+    assert(node != NULL);
     res = _PyDict_SetItem_KnownHash(self->dict,
                                     node->key,
                                     (PyObject *)node,
@@ -721,9 +723,9 @@ lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
     else {
         /* replacing old value of key -- no need to create new node, just
          * do the switcheroo for the node's ->value pointer. The former value
-         * is NOT DECREF'ed at this point: : it's refcount stays the same and
-         * it is now written to the output parameter oldvalue_ref. The DECREF
-         * is expected to be done by the caller after leaving the critical
+         * is NOT DECREF'ed at this point: its refcount stays the same and it
+         * is now written to the output parameter oldvalue_ref. The DECREF is
+         * expected to be done by the caller after leaving the critical
          * section. */
         Py_INCREF(value);
         *oldvalue_ref = n->value;
@@ -755,6 +757,7 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
         res = lru_popnode_impl(self, key, kh, &popped_node);
         LRU_LEAVE_CRIT(self);
         if (likely(res == 0)) {
+            assert(popped_node != NULL);
             Py_DECREF(popped_node);
         }
         return res;
@@ -1105,7 +1108,7 @@ static PyObject *
 LRU_setdefault(LRUDict *self, PyObject *args)
 {
     /* args to be parsed */
-    PyObject *key = NULL;
+    PyObject *key;
     PyObject *default_obj = Py_None;
     Node *ret_node;
     PyObject *res;
@@ -1117,6 +1120,7 @@ LRU_setdefault(LRUDict *self, PyObject *args)
     }
     assert(key != NULL);
     assert(default_obj != NULL);
+
     if (unlikely((kh = get_hash(key)) == -1)) {
         return NULL;
     }
