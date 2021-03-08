@@ -872,8 +872,8 @@ get_item(const Node *restrict node)
 {
     PyObject *tuple = PyTuple_New(2);
     Py_INCREF(node->key);
-    PyTuple_SET_ITEM(tuple, 0, node->key);
     Py_INCREF(node->value);
+    PyTuple_SET_ITEM(tuple, 0, node->key);
     PyTuple_SET_ITEM(tuple, 1, node->value);
     return tuple;
 }
@@ -1776,8 +1776,8 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
         for (Py_ssize_t i = 0; i < len; i++) {
             cur = (Node *)PyList_GET_ITEM(self->purge_queue->lst, i);
             if (cur) {
-                Py_VISIT(cur->value);
                 Py_VISIT(cur->key);
+                Py_VISIT(cur->value);
             }
         }
     }
