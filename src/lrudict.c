@@ -232,7 +232,8 @@ lru_delete_last_impl(LRUDict *self)
         /* detach; n->prev is never NULL because the only item cannot be
          * evicted. */
         assert(n->prev != NULL);
-        (self->last = n->prev)->next = NULL;
+        self->last = n->prev;
+        self->last->next = NULL;
         /* The list will increase the refcount to the node if successful */
         if (self->callback ||
             lru_decref_unsafe(n->value) || lru_decref_unsafe(n->key))
