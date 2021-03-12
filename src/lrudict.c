@@ -515,8 +515,7 @@ get_hash(PyObject *k)
 {
     Py_hash_t hash;
 
-    if (!PyUnicode_CheckExact(k) ||
-        unlikely((hash = ((PyASCIIObject *)k)->hash) == -1))
+    if (!PyUnicode_CheckExact(k) || (hash = ((PyASCIIObject *)k)->hash) == -1)
     {
         hash = PyObject_Hash(k);
     }
