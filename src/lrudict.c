@@ -768,17 +768,17 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
         res = lru_push_impl(self, key, value, kh, &old_value);
         LRU_LEAVE_CRIT(self);
         if (res == 0) {
-            if (old_value != NULL) {
-                /* Replaced old_value */
-                Py_DECREF(old_value);
-            }
-            else {
+            if (old_value == NULL) {
                 /* Inserted value */
                 if (PURGE_MAYBE_FAIL(self)) {
                     res = -1;
                 }
             }
-        }
+            else {
+                /* Replaced old_value */
+                Py_DECREF(old_value);
+            }
+        }  /* test whether push result "meaningful"; fall through if not */
         return res;
     }
 }
