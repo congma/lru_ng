@@ -46,8 +46,8 @@ extern PyObject * _PyObject_New(PyTypeObject *);
 static void
 node_dealloc(Node *self)
 {
-    Py_DECREF(self->key);
-    Py_DECREF(self->value);
+    Py_DECREF(self->pl.key);
+    Py_DECREF(self->pl.value);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -55,7 +55,7 @@ node_dealloc(Node *self)
 static PyObject *
 node_repr(Node *self)
 {
-    return PyObject_Repr(self->value);
+    return PyObject_Repr(self->pl.value);
 }
 
 
@@ -72,14 +72,21 @@ static PyTypeObject NodeType = {
 };
 
 
-#define NODE_INIT(_node, _k, _v, _kh)  \
-do {                            \
-    Py_INCREF((_k));            \
-    Py_INCREF((_v));            \
-    (_node)->key = (_k);        \
-    (_node)->value = (_v);      \
-    (_node)->key_hash = (_kh);  \
-} while (0)
+/* Return new ref to newly created node initialized with payload, or NULL
+ * in case of failure to create node at all. */
+static inline Node *
+node_getnewfrom(const NodePayload *restrict payload)
+{
+    Node *n;
+
+    if ((n = PyObject_New(Node, &NodeType)) != NULL) {
+        Py_INCREF(payload->key);
+        Py_INCREF(payload->value);
+        /* Note: direct copy of struct via (indirect) assignment. */
+        n->pl = *payload;
+    }
+    return n;
+}
 
 
 /* LRUDict internal critical section macros. These sections must be entered
@@ -187,19 +194,10 @@ lru_promote_node(LRUDict *self, Node *node)
 static inline _Bool
 lru_decref_unsafe(const PyObject *obj)
 {
-    if (obj == NULL) {
-        return 0;
-    }
-
-    if (PyUnicode_CheckExact(obj) || PyLong_CheckExact(obj) ||
-        obj == Py_None || PyBool_Check(obj) || PyFloat_CheckExact(obj) ||
-        PyComplex_CheckExact(obj) || PyBytes_CheckExact(obj) ||
-        PyByteArray_CheckExact(obj))
-    {
-        return 0;
-    }
-
-    return 1;
+    return !(PyUnicode_CheckExact(obj) || PyLong_CheckExact(obj) ||
+             obj == Py_None || PyBool_Check(obj) || PyFloat_CheckExact(obj) ||
+             PyComplex_CheckExact(obj) || PyBytes_CheckExact(obj) ||
+             PyByteArray_CheckExact(obj));
 }
 
 
@@ -230,7 +228,8 @@ lru_delete_last_impl(LRUDict *self)
      * here, because as we DECREF the last reference to the node, it's possible
      * to trigger arbitrary code in the Node's key or value's __del__.*/
     Py_INCREF(n);
-    if (_PyDict_DelItem_KnownHash(self->dict, n->key, n->key_hash) == 0) {
+    if (_PyDict_DelItem_KnownHash(self->dict, n->pl.key, n->pl.key_hash) == 0)
+    {
         /* detach; n->prev is never NULL because the only item cannot be
          * evicted. */
         assert(n->prev != NULL);
@@ -238,7 +237,7 @@ lru_delete_last_impl(LRUDict *self)
         self->last->next = NULL;
         /* The list will increase the refcount to the node if successful */
         if (self->callback ||
-            lru_decref_unsafe(n->value) || lru_decref_unsafe(n->key))
+            lru_decref_unsafe(n->pl.value) || lru_decref_unsafe(n->pl.key))
         {
             if (lrupq_push(self->purge_queue, (PyObject *)n) == 0) {
                 self->_pb = 1;
@@ -503,8 +502,8 @@ lru_hit_impl(LRUDict *self, Node *node)
 {
     lru_promote_node(self, node);
     self->hits++;
-    Py_INCREF(node->value);
-    return node->value;
+    Py_INCREF(node->pl.value);
+    return node->pl.value;
 }
 
 
@@ -654,9 +653,9 @@ lru_insert_new_node_impl(LRUDict *self, Node *node)
 
     assert(node != NULL);
     res = _PyDict_SetItem_KnownHash(self->dict,
-                                    node->key,
+                                    node->pl.key,
                                     (PyObject *)node,
-                                    node->key_hash);
+                                    node->pl.key_hash);
     if (res == 0) {
         assert(self->first != node);
         lru_attach_node(self, node);
@@ -676,16 +675,16 @@ lru_insert_new_node_impl(LRUDict *self, Node *node)
  *  In the case of inserting new key, a new node is created, inserted, and
  *  pushed to the queue head. The output parameter oldvalue_ref is NULL.
  *
- *  In the case of replacing the value of old key, the node's ->value member is
- *  replaced and written to the output parameter oldvalue_ref (a borrowed ref,
- *  meaning that it's refcount is unchanged). The refcount of value is
- *  INCREF'ed (it is not "stolen").
+ *  In the case of replacing the value of old key, the node payload's value
+ *  member is replaced and written to the output parameter oldvalue_ref (a
+ *  borrowed ref, meaning that it's refcount is unchanged). The refcount of
+ *  value is INCREF'ed (it is not "stolen").
  *
  * If th error status == -1:
  *
  *  The exception is set. The output parameter is ununsable. */
 static inline int
-lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
+lru_push_impl(LRUDict *self, const NodePayload *restrict payload,
               PyObject **oldvalue_ref)
 {
     int res;
@@ -693,7 +692,7 @@ lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
     Py_ssize_t index;
 
     /* Try borrowing a ref from dict */
-    index = direct_lookup(self->dict, key, kh, &n);
+    index = direct_lookup(self->dict, payload->key, payload->key_hash, &n);
 
     if (n == NULL) {
         if (unlikely(index == DKIX_ERROR)) {
@@ -701,12 +700,10 @@ lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
         }
 
         /* inserting new key */
-        n = PyObject_New(Node, &NodeType);
-        if (unlikely(n == NULL)) {
+        if (unlikely((n = node_getnewfrom(payload)) == NULL)) {
             return -1;
         }
-        /* populate new node; this INCREF the key and value. */
-        NODE_INIT(n, key, value, kh);
+
         res = lru_insert_new_node_impl(self, n);
         if (res == 0) {
             *oldvalue_ref = NULL;
@@ -719,14 +716,14 @@ lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
     }
     else {
         /* replacing old value of key -- no need to create new node, just
-         * do the switcheroo for the node's ->value pointer. The former value
-         * is NOT DECREF'ed at this point: its refcount stays the same and it
-         * is now written to the output parameter oldvalue_ref. The DECREF is
-         * expected to be done by the caller after leaving the critical
-         * section. */
-        Py_INCREF(value);
-        *oldvalue_ref = n->value;
-        n->value = value;
+         * do the switcheroo for the node payload's value member. The former
+         * value is NOT DECREF'ed at this point: its refcount stays the same
+         * and it is now written to the output parameter oldvalue_ref. The
+         * DECREF is expected to be done by the caller after leaving the
+         * critical section. */
+        Py_INCREF(payload->value);
+        *oldvalue_ref = n->pl.value;
+        n->pl.value = payload->value;
         /* Promote node to first. */
         lru_promote_node(self, n);
         res = 0;
@@ -762,9 +759,10 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
     else {
         /* insertion or replacement */
         PyObject *old_value;
+        NodePayload pl = {key, value, kh};
 
         LRU_ENTER_CRIT(self, -1);
-        res = lru_push_impl(self, key, value, kh, &old_value);
+        res = lru_push_impl(self, &pl, &old_value);
         LRU_LEAVE_CRIT(self);
         if (res == 0) {
             if (old_value == NULL) {
@@ -835,8 +833,8 @@ fail:
 static PyObject *
 get_key(const Node *restrict node)
 {
-    Py_INCREF(node->key);
-    return node->key;
+    Py_INCREF(node->pl.key);
+    return node->pl.key;
 }
 
 
@@ -855,8 +853,8 @@ LRU_keys(LRUDict *self, PyObject *Py_UNUSED(ignored))
 static PyObject *
 get_value(const Node *restrict node)
 {
-    Py_INCREF(node->value);
-    return node->value;
+    Py_INCREF(node->pl.value);
+    return node->pl.value;
 }
 
 
@@ -876,10 +874,10 @@ static PyObject *
 get_item(const Node *restrict node)
 {
     PyObject *tuple = PyTuple_New(2);
-    Py_INCREF(node->key);
-    Py_INCREF(node->value);
-    PyTuple_SET_ITEM(tuple, 0, node->key);
-    PyTuple_SET_ITEM(tuple, 1, node->value);
+    Py_INCREF(node->pl.key);
+    Py_INCREF(node->pl.value);
+    PyTuple_SET_ITEM(tuple, 0, node->pl.key);
+    PyTuple_SET_ITEM(tuple, 1, node->pl.value);
     return tuple;
 }
 
@@ -965,7 +963,8 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src,
                 break;
             }
 
-            push_status = lru_push_impl(self, key, value, kh, cur);
+            NodePayload pl = {key, value, kh};
+            push_status = lru_push_impl(self, &pl, cur);
 
             if (unlikely(push_status != 0)) {
                 ret_status = -1;
@@ -1132,35 +1131,33 @@ LRU_setdefault(LRUDict *self, PyObject *args)
     LRU_ENTER_CRIT(self, NULL);
     /* Try borrowing a ref by key */
     index = direct_lookup(self->dict, key, kh, &ret_node);
-    /* XXX: use a less nesty style */
     if (ret_node == NULL) {
         /* Error or key not in */
         if (unlikely(index == DKIX_ERROR)) { /* GetItem internal error */
             LRU_LEAVE_CRIT(self);
             return NULL;
         }
+
+        int status;
+        NodePayload pl = {key, default_obj, kh};
         /* key not in, this is not a miss, pack default_obj and insert */
-        Node *default_node = PyObject_New(Node, &NodeType);
-        if (unlikely(default_node == NULL)) {
+        if (unlikely((ret_node = node_getnewfrom(&pl)) == NULL)) {
             LRU_LEAVE_CRIT(self);
             return NULL;
         }
 
-        int status;
-
-        /* This INCREF's the key and default_obj */
-        NODE_INIT(default_node, key, default_obj, kh);
-        status = lru_insert_new_node_impl(self, default_node);
+        status = lru_insert_new_node_impl(self, ret_node);
         if (status == 0) {
             /* Return new ref (this is in addition to the new ref owned by the
-             * node. */
+             * node payload. */
             Py_INCREF(default_obj);
             res = default_obj;
         }
         else {
             res = NULL;
         }
-        Py_DECREF(default_node);
+        /* Safe to DECREF; won't trigger further dealloc of key or value. */
+        Py_DECREF(ret_node);
     }
     else {    /* not (ret_node == NULL) */
         /* key is in, this is a hit */
@@ -1198,8 +1195,8 @@ LRU_pop(LRUDict *self, PyObject *args)
         /* ret_node != NULL, delete it, unbox, and return value */
         /* lru_hit_impl will do a promotion; don't use it. */
         lru_detach_node(self, ret_node);
-        Py_INCREF(ret_node->value);
-        result = ret_node->value;
+        Py_INCREF(ret_node->pl.value);
+        result = ret_node->pl.value;
         self->hits++;
 
         LRU_LEAVE_CRIT(self);
@@ -1247,7 +1244,8 @@ LRU_popitem(LRUDict *self, PyObject *args)
     }
 
     Py_INCREF(node);
-    if (_PyDict_DelItem_KnownHash(self->dict, node->key, node->key_hash) == 0)
+    if (_PyDict_DelItem_KnownHash(self->dict,
+                                  node->pl.key, node->pl.key_hash) == 0)
     {
         lru_detach_node(self, node);
     }
@@ -1340,7 +1338,10 @@ LRU_to_dict(LRUDict *self, PyObject *Py_UNUSED(ignored))
 
     LRU_ENTER_CRIT(self, NULL);
     while (n != NULL) {
-        status = _PyDict_SetItem_KnownHash(dst, n->key, n->value, n->key_hash);
+        status = _PyDict_SetItem_KnownHash(dst,
+                                           n->pl.key,
+                                           n->pl.value,
+                                           n->pl.key_hash);
         if (unlikely(status == -1)) {
             break;
         }
@@ -1768,7 +1769,7 @@ LRU_fini(LRUDict *self)
  * members (which it owns). The visitations go through the node items (most
  * likely place to form cycles), node keys, then purge queue (usually short),
  * and finally the callback object. (NOTE: cycles are rare, and we fuse the
- * loops over node->key and node->value since the loops are likely to be
+ * loops over node->pl.key and node->pl.value since the loops are likely to be
  * exhausted rather than early-returned. ) */
 static int
 LRU_traverse(LRUDict *self, visitproc visit, void *arg)
@@ -1776,8 +1777,8 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
     Node *cur = self->last;
 
     while (cur) {
-        Py_VISIT(cur->key);
-        Py_VISIT(cur->value);
+        Py_VISIT(cur->pl.key);
+        Py_VISIT(cur->pl.value);
         cur = cur->prev;
     }
 
@@ -1786,8 +1787,8 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
         for (Py_ssize_t i = 0; i < len; i++) {
             cur = (Node *)PyList_GET_ITEM(self->purge_queue->lst, i);
             if (cur) {
-                Py_VISIT(cur->key);
-                Py_VISIT(cur->value);
+                Py_VISIT(cur->pl.key);
+                Py_VISIT(cur->pl.value);
             }
         }
     }
