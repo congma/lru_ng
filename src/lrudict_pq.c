@@ -9,7 +9,7 @@
 static inline void
 lrupurge_unraise(PyObject *obj)
 {
-    if (likely(PyErr_Occurred())) {
+    if (PyErr_Occurred()) {
         PyErr_WriteUnraisable(obj);
         PyErr_Clear();
     }
@@ -137,7 +137,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
 
             cres = PyObject_CallFunctionObjArgs(callback, n->key, n->value,
                                                 NULL);
-            if (likely(cres != NULL)) {
+            if (cres != NULL) {
                 /* Discard return value of callback. */
                 Py_DECREF(cres);
                 continue;
@@ -148,7 +148,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
              * explicitly. */
             {
                 PyObject *exc = PyErr_Occurred();
-                if (likely(exc)) {
+                if (exc) {
                     if (lrupq_err_bad(exc)) {
                         /* External exception that needs the attention of
                          * interpreter: do not suppress. Instead, abandon,
@@ -158,6 +158,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
                         break;
                     }
                     else {
+                        /* Exception ignored. */
                         PyErr_WriteUnraisable(callback);
                         PyErr_Clear();
                     }
@@ -184,15 +185,16 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
         batch = q->sinfo;
 
         Py_INCREF(q->lst);
-        if (unlikely(PyList_SetSlice(q->lst, 0, batch.head, NULL) == -1)) {
-            lrupurge_unraise(q->lst);
-            res = -1;
-        }
-        else {
-            /* Re-sync index information. */
+        if (PyList_SetSlice(q->lst, 0, batch.head, NULL) == 0) {
+            /* slice deletion succeeds; re-sync index information. */
             res = batch.head;
             q->sinfo.head -= res;
             q->sinfo.tail -= res;
+        }
+        else {
+            /* slice deletion fails (very unlikely) */
+            lrupurge_unraise(q->lst);
+            res = -1;
         }
         q->n_active--;
         Py_DECREF(q->lst);

@@ -5,6 +5,10 @@
 #include "lrudict_pq.h"
 #include "lrudict_exctype.h"
 #include "lrudict_statstype.h"
+#ifdef __GNUC__
+__attribute__((malloc))
+extern PyObject * _PyObject_New(PyTypeObject *);
+#endif
 
 
 /*
@@ -83,7 +87,7 @@ do {                            \
  * sequence is only used in Python-facing methods and nowhere else */
 #define LRU_ENTER_CRIT(self, failresult)    \
 do {                                        \
-    if (likely((self)->detect_conflict) && unlikely((self)->internal_busy)) \
+    if ((self)->detect_conflict && (self)->internal_busy) \
     {  \
         PyErr_SetString(LRUDictExc_BusyErr, \
                 "attempted entry into LRUDict critical section while busy");\
@@ -202,12 +206,12 @@ lru_decref_unsafe(const PyObject *obj)
 static inline int
 lrupq_push(LRUDict_pq *q, PyObject *restrict obj)
 {
-    if (unlikely(PyList_Append(q->lst, obj) == -1)) {
-        return -1;
-    }
-    else {
+    if (PyList_Append(q->lst, obj) == 0) {
         q->sinfo.tail++;
         return 0;
+    }
+    else {
+        return -1;
     }
 }
 
@@ -226,9 +230,7 @@ lru_delete_last_impl(LRUDict *self)
      * here, because as we DECREF the last reference to the node, it's possible
      * to trigger arbitrary code in the Node's key or value's __del__.*/
     Py_INCREF(n);
-    if (likely(_PyDict_DelItem_KnownHash(self->dict,
-                                         n->key, n->key_hash) == 0))
-    {
+    if (_PyDict_DelItem_KnownHash(self->dict, n->key, n->key_hash) == 0) {
         /* detach; n->prev is never NULL because the only item cannot be
          * evicted. */
         assert(n->prev != NULL);
@@ -238,7 +240,7 @@ lru_delete_last_impl(LRUDict *self)
         if (self->callback ||
             lru_decref_unsafe(n->value) || lru_decref_unsafe(n->key))
         {
-            if (likely(lrupq_push(self->purge_queue, (PyObject *)n) == 0)) {
+            if (lrupq_push(self->purge_queue, (PyObject *)n) == 0) {
                 self->_pb = 1;
             }
         }
@@ -591,9 +593,10 @@ LRU_subscript(LRUDict *self, PyObject *key)
     status = lru_subscript_impl(self, key, &value);
     LRU_LEAVE_CRIT(self);
 
-    if (likely(status != -1) && value == NULL) {
+    if (status == 0 && value == NULL) {
         _PyErr_SetKeyError(key);
     }
+    /* unified return: if error, value already NULL'ed. */
     return value;
 }
 
@@ -629,7 +632,7 @@ lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh, Node **node_ref)
     assert(node_ref != NULL);
     Py_INCREF(*node_ref);
     res = _PyDict_DelItem_KnownHash(self->dict, key, kh);
-    if (likely(res == 0)) {
+    if (res == 0) {
         /* If dict item-deletion succeed, detach from queue and keep this ref
          * for the output parameter. */
         lru_detach_node(self, *node_ref);
@@ -655,13 +658,15 @@ lru_insert_new_node_impl(LRUDict *self, Node *node)
                                     node->key,
                                     (PyObject *)node,
                                     node->key_hash);
-    if (likely(res == 0)) {
+    if (res == 0) {
         assert(self->first != node);
         lru_attach_node(self, node);
     }
+
     if (lru_length_impl(self) > self->size) {
         lru_delete_last_impl(self);
     }
+
     return res;
 }
 
@@ -704,7 +709,7 @@ lru_push_impl(LRUDict *self, PyObject *key, PyObject *value, Py_hash_t kh,
         /* populate new node; this INCREF the key and value. */
         NODE_INIT(n, key, value, kh);
         res = lru_insert_new_node_impl(self, n);
-        if (likely(res == 0)) {
+        if (res == 0) {
             *oldvalue_ref = NULL;
         }
         /* No matter the dict SetItem succeed or not, our ref is now useless.
@@ -749,7 +754,7 @@ LRU_ass_sub(LRUDict *self, PyObject *key, PyObject *value)
         LRU_ENTER_CRIT(self, -1);
         res = lru_popnode_impl(self, key, kh, &popped_node);
         LRU_LEAVE_CRIT(self);
-        if (likely(res == 0)) {
+        if (res == 0) {
             assert(popped_node != NULL);
             Py_DECREF(popped_node);
         }
@@ -811,7 +816,7 @@ collect(LRUDict *self, PyObject * (*getterfunc)(const Node *restrict))
     while (curr != NULL) {
         PyObject * obj;
 
-        if (likely((obj = getterfunc(curr)) != NULL)) {
+        if ((obj = getterfunc(curr)) != NULL) {
             PyList_SET_ITEM(v, i++, obj);
             curr = curr->next;
         }
@@ -912,11 +917,14 @@ LRU_get(LRUDict *self, PyObject *args)
     status = lru_subscript_impl(self, key, &result);
     LRU_LEAVE_CRIT(self);
 
-    if (unlikely(status == -1)) {
+    if (status == 0) {
+        return result ? result : (Py_INCREF(default_obj), default_obj);
+    }
+    else {
+        /* error */
+        assert(result == NULL);
         return result;
     }
-
-    return result ? result : (Py_INCREF(default_obj), default_obj);
 }
 
 
@@ -957,11 +965,14 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src,
                 ret_status = -1;
                 break;
             }
+
             push_status = lru_push_impl(self, key, value, kh, cur);
+
             if (unlikely(push_status != 0)) {
                 ret_status = -1;
                 break;
             }
+
             if ((*cur) != NULL) {
                 /* Only advance the position in buffer if the value written
                  * is not NULL */
@@ -969,6 +980,7 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src,
             }
         }
         else {
+            /* src exhausted */
             ret_status = 0;
             break;
         }
@@ -995,7 +1007,7 @@ lru_update_with(LRUDict *self, PyObject *other, update_buf_t *restrict updbuf)
     do {
         int status;
 
-        if (likely(self->detect_conflict) && unlikely(self->internal_busy))
+        if (self->detect_conflict && self->internal_busy)
         {
             PyErr_SetString(LRUDictExc_BusyErr,
                             "attempted entry into LRUDict critical section"
@@ -1141,7 +1153,7 @@ LRU_setdefault(LRUDict *self, PyObject *args)
         /* This INCREF's the key and default_obj */
         NODE_INIT(default_node, key, default_obj, kh);
         status = lru_insert_new_node_impl(self, default_node);
-        if (likely(status == 0)) {
+        if (status == 0) {
             /* Return new ref (this is in addition to the new ref owned by the
              * node. */
             Py_INCREF(default_obj);
@@ -1237,8 +1249,7 @@ LRU_popitem(LRUDict *self, PyObject *args)
     }
 
     Py_INCREF(node);
-    if (likely(_PyDict_DelItem_KnownHash(self->dict,
-                                         node->key, node->key_hash) == 0))
+    if (_PyDict_DelItem_KnownHash(self->dict, node->key, node->key_hash) == 0)
     {
         lru_detach_node(self, node);
     }
@@ -1591,7 +1602,7 @@ static PyGetSetDef LRU_descriptors[] = {
 #define GETREPR_TRY_EXCEPT(namevar, callexpr, checkexpr, action_statement)  \
 do {                              \
     (namevar) = (callexpr);       \
-    if (likely((namevar) != NULL)) {      \
+    if ((namevar) != NULL) {      \
         if ((checkexpr)) {        \
             action_statement;     \
         }                         \
