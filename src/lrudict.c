@@ -218,7 +218,7 @@ lrupq_push(LRUDict_pq *q, PyObject *restrict obj)
 
 /* Can only be called while there's actually a node to delete (evict), such
  * that self->last != NULL.  */
-static inline void
+static void
 lru_delete_last_impl(LRUDict *self)
 {
     Node *n = self->last;
