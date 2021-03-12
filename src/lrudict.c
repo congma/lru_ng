@@ -306,19 +306,19 @@ LRU_get_size_legacy(LRUDict *self, PyObject *Py_UNUSED(ignored))
 
 
 static inline int
-lru_set_size_impl(LRUDict *self, Py_ssize_t newsize)
+lru_set_size_impl(LRUDict *self, Py_ssize_t n)
 {
-    if (newsize <= 0) {
+    if (n > 0) {
+        self->size = n;
+        for (Py_ssize_t i = lru_length_impl(self) - n; i > 0; i--) {
+            lru_delete_last_impl(self);
+        }
+        return 0;
+    }
+    else {
         PyErr_SetString(PyExc_ValueError, "size must be positive");
         return -1;
     }
-
-    self->size = newsize;
-    for (Py_ssize_t len = lru_length_impl(self); len > newsize; len--) {
-        lru_delete_last_impl(self);
-    }
-
-    return 0;
 }
 
 
@@ -1020,12 +1020,11 @@ lru_update_with(LRUDict *self, PyObject *other, update_buf_t *restrict updbuf)
 
         status = lru_update_fill_buffer(self, other, updbuf);
 
-        if (unlikely(status == -1)) {
+        if (status == 0) {
+            leave = 1;
+        } else if (status == -1) {
             fail = 1;
-            leave = 1;
-        }
-        else if (status == 0) {
-            leave = 1;
+            leave= 1;
         }
 
         self->internal_busy = 0;
