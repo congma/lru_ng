@@ -135,7 +135,8 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
                 continue;
             }
 
-            cres = PyObject_CallFunctionObjArgs(callback, n->key, n->value,
+            cres = PyObject_CallFunctionObjArgs(callback,
+                                                n->pl.key, n->pl.value,
                                                 NULL);
             if (cres != NULL) {
                 /* Discard return value of callback. */

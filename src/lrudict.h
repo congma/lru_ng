@@ -22,15 +22,25 @@ typedef enum {
 
 /* 
  * Node object and type, lightweight Python object type as stored values in
- * Python dict
+ * Python dict. The NodePayload struct is mostly just a (hopefully) convenient
+ * way to "pack" values (as non-boxed PoD values) on the stack, and passed
+ * around by pointer, so as to reduce the number of arguments to internal
+ * functions/macros. It cannot "own" (in the Python reference-counting sense)
+ * the key and value: the real "owner" is the Node object. The payload struct
+ * is just something that can be copied to the pl member of Node.
  */
+typedef struct _NodePayload {
+    PyObject *key;
+    PyObject *value;
+    Py_hash_t key_hash;
+} NodePayload;
+
+
 typedef struct _Node {
     PyObject_HEAD
     struct _Node *prev;
     struct _Node *next;
-    PyObject *key;
-    PyObject *value;
-    Py_hash_t key_hash;
+    NodePayload pl;
 } Node;
 
 
