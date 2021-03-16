@@ -8,6 +8,7 @@ modextension = Extension("lru_ng",
                          sources=["src/lrudict.c",
                                   "src/lrudict_pq.c"],
                          depends=["src/lrudict.h",
+                                  "src/tinyset.c",
                                   "src/lrudict_exctype.h",
                                   "src/lrudict_statstype.h",
                                   "src/lrudict_pq.h"])
