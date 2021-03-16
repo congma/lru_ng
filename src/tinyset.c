@@ -14,7 +14,7 @@
  * Pros and cons:
  *
  * - Constant lookup time, with exactly one hashing, one array indexing, and
- *   one branching per lookup.
+ *   one comparison (or xor) per lookup.
  * - OK-ish small table size if input collection is small.
  * - Very fast hash function (in the words of K&R, originally for a simple
  *   string hash, "[t]his is not the best possible hash function, but it is
@@ -241,6 +241,6 @@ static _Bool
 ts_has_elem(const TinySet *restrict s, const void *restrict elem)
 {
     unsigned int index = ts_get_index(elem, &(s->hash_context));
-    return (s->array[index] == elem) ? 1 : 0;
+    return !((uintptr_t)(s->array[index]) ^ (uintptr_t)elem);
 }
 #endif /* TINYSET_C */
