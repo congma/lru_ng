@@ -39,7 +39,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <limits.h>
-#include <assert.h>
 
 #define TS_WIDTH_BITS  (SIZEOF_VOID_P * CHAR_BIT)
 #define ROT_MASK ((unsigned int)(TS_WIDTH_BITS - 1u))
