@@ -1892,12 +1892,24 @@ static PyTypeObject LRUDictType = {
 };
 
 
+static void
+lru_ng_module_free_safe_types(void *mself)
+{
+    if (mself == NULL) {
+        return;
+    }
+    ts_destroy(lru_safe_types);
+    return;
+}
+
+
 /* Module structure */
 static struct PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
     .m_name = "lru_ng",
     .m_doc = lru_doc,
     .m_size = -1,
+    .m_free = lru_ng_module_free_safe_types,
 };
 
 
@@ -1916,7 +1928,7 @@ moduleinit(void)
         return NULL;
     }
 
-    /* Pull in the heap-allocated types */
+    /* Pull in the types */
     if (PyType_Ready(&NodeType) < 0) {
         return NULL;
     }
@@ -1949,17 +1961,11 @@ moduleinit(void)
     /* Make types available to module, or fail and cleanup */
     Py_INCREF(&NodeType);
     Py_INCREF(&LRUDictType);
-#ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
-    Py_INCREF(LRUDictStatsType);
-#endif
     if (PyModule_AddObject(m, "LRUDict", (PyObject *)(&LRUDictType)) < 0 ||
         PyModule_AddObject(m, "LRUDictBusyError", LRUDictExc_BusyErr) < 0)
     {
         Py_DECREF(&LRUDictType);
         Py_DECREF(&NodeType);
-#ifdef LRUDICT_STRUCT_SEQUENCE_NOT_BROKEN
-        Py_DECREF(LRUDictStatsType);
-#endif
         Py_DECREF(m);
         m = NULL;
     }
