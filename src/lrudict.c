@@ -8,7 +8,13 @@
 #ifdef __GNUC__
 __attribute__((malloc))
 extern PyObject * _PyObject_New(PyTypeObject *);
+
+__attribute__((malloc))
+extern void * PyMem_Malloc(size_t);
 #endif
+
+#include "tinyset.c"
+static TinySet *lru_safe_types;
 
 
 /*
@@ -194,10 +200,7 @@ lru_promote_node(LRUDict *self, Node *node)
 static inline _Bool
 lru_decref_unsafe(const PyObject *obj)
 {
-    return !(PyUnicode_CheckExact(obj) || PyLong_CheckExact(obj) ||
-             obj == Py_None || PyBool_Check(obj) || PyFloat_CheckExact(obj) ||
-             PyComplex_CheckExact(obj) || PyBytes_CheckExact(obj) ||
-             PyByteArray_CheckExact(obj));
+    return !ts_has_elem(lru_safe_types, (const void *)Py_TYPE(obj));
 }
 
 
@@ -237,7 +240,7 @@ lru_delete_last_impl(LRUDict *self)
         self->last->next = NULL;
         /* The list will increase the refcount to the node if successful */
         if (self->callback ||
-            lru_decref_unsafe(n->pl.value) || lru_decref_unsafe(n->pl.key))
+            (lru_decref_unsafe(n->pl.key) | lru_decref_unsafe(n->pl.value)))
         {
             if (lrupq_push(self->purge_queue, (PyObject *)n) == 0) {
                 self->_pb = 1;
@@ -1902,6 +1905,16 @@ static PyObject *
 moduleinit(void)
 {
     PyObject *m;
+    PyTypeObject *st_list[] = {&_PyNone_Type, &PyUnicode_Type, &PyLong_Type,
+                               &PyBytes_Type, &PyByteArray_Type,
+                               &PyBool_Type, &PyFloat_Type, &PyComplex_Type};
+    lru_safe_types = ts_create((const void *const *)st_list,
+                               sizeof(st_list) / sizeof(st_list[0]));
+    if (lru_safe_types == NULL) {
+        PyErr_SetString(PyExc_MemoryError,
+                        "Failed to create or initialize safe-type set");
+        return NULL;
+    }
 
     /* Pull in the heap-allocated types */
     if (PyType_Ready(&NodeType) < 0) {
