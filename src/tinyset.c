@@ -47,12 +47,12 @@
 #if SIZEOF_VOID_P == 4    /* 32-bit */
 
     #define LOG_WIDTH 5   /* log(32) */
-    #define FIB_FACTOR    UINT32_C(0x9e3779b9)
+    #define FIB_FACTOR    UINT32_C(0x61c88647)
 
 #elif SIZEOF_VOID_P == 8  /* 64-bit */
 
     #define LOG_WIDTH 6   /* log(64) */
-    #define FIB_FACTOR    UINT64_C(0x9e3779b97f4a7c15)
+    #define FIB_FACTOR    UINT64_C(0x61c8864680b583eb)
 
 #else                     /* unknown-bit */
     #error pointer byte size must be 4 or 8
@@ -102,14 +102,13 @@ next_exponent(size_t i)
 /* Evaluate the index for input x in context pointed to by ctx. This is based
  * on a simple combination of rotation (i.e. circular shift, see Python's
  * pointer hash) parametrised by the context's shift_offset field, and an
- * (implied) modular-multiplication by golden ratio constant, followed by the
- * extraction of the most-significant bits. Notice that rotation in itself
- * doesn't have good distributing ability; it's chiefly to avoid fixed
- * patterns, constants, and strides caused by alignment and memory-allocator
- * behaviour. This also tends to work better than one simple shift-and-xor for
- * pointers. The rotation tends to complement the modular multiplication by
- * shifting the low-entropy bits in the source to the low-sensitivity places
- * of the latter. */
+ * (implied) modular-multiplication by (1 - phi), followed by the extraction of
+ * the most-significant bits. Notice that rotation in itself doesn't have good
+ * distributing ability; it's chiefly to avoid fixed patterns, constants, and
+ * strides caused by alignment and memory-allocator behaviour. This also tends
+ * to work better than one simple shift-and-xor for pointers. The rotation
+ * tends to complement the modular multiplication by shifting the low-entropy
+ * bits in the source to the low-sensitivity places of the latter. */
 static unsigned int
 ts_get_index(const void *x, const struct ts_param *restrict ctx)
 {
