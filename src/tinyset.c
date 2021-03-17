@@ -42,6 +42,7 @@
 #include <assert.h>
 
 #define TS_WIDTH_BITS  (SIZEOF_VOID_P * CHAR_BIT)
+#define ROT_MASK ((unsigned int)(TS_WIDTH_BITS - 1u))
 
 #if SIZEOF_VOID_P == 4    /* 32-bit */
 
@@ -66,18 +67,19 @@ struct ts_param {
 
 typedef struct ts_set {
     struct ts_param hash_context;
-    const void *const *array;     /* Pointer to sparse array. */
+    const void *const *array;
 } TinySet;
 
 
-/* Rotate unsigned representation right ("counterclockwise") by b bits. b,
- * being positive, must be less than the bit width (otherwise the behaviour is
- * undefined). This should compile nicely into one rotation instruction. */
+/* Rotate unsigned representation right ("counterclockwise") by b bits. b and
+ * its modular-negation is modular-reduced to be within the width of i so that
+ * the behaviour is defined at the C level. This should compile nicely into one
+ * rotation instruction. */
 static inline uintptr_t
 ror(uintptr_t i, unsigned int b)
 {
-    assert(b < TS_WIDTH_BITS);
-    return (i >> b) | (i << (TS_WIDTH_BITS - b));
+    b &= ROT_MASK;
+    return (i >> b) | (i << (-b & ROT_MASK));
 }
 
 
