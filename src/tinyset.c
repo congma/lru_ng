@@ -28,6 +28,10 @@
  * - Very likely not minimal, wasting storage.
  * - Looking up the null pointer always results in a "in", unless we're lucky
  *   to stumble upon a minimal hash function by chance.
+ *
+ * Assertions are used liberally in the code, even on critical paths. All they
+ * do is to "state the obvious" (invariants) and should be compiled out with
+ * -DNDEBUG in release/production code.
  */
 
 #ifndef PY_SSIZE_T_CLEAN
@@ -39,18 +43,19 @@
 #include <stdint.h>
 #include <string.h>
 #include <limits.h>
+#include <assert.h>
 
 #define TS_WIDTH_BITS  (SIZEOF_VOID_P * CHAR_BIT)
-#define ROT_MASK ((unsigned int)(TS_WIDTH_BITS - 1u))
+#define ROT_MASK ((unsigned int)(TS_WIDTH_BITS - 1U))
 
 #if SIZEOF_VOID_P == 4    /* 32-bit */
 
-    #define LOG_WIDTH 5   /* log(32) */
+    #define LOG_WIDTH 5U  /* log(32) */
     #define FIB_FACTOR    UINT32_C(0x61c88647)
 
 #elif SIZEOF_VOID_P == 8  /* 64-bit */
 
-    #define LOG_WIDTH 6   /* log(64) */
+    #define LOG_WIDTH 6U  /* log(64) */
     #define FIB_FACTOR    UINT64_C(0x61c8864680b583eb)
 
 #else                     /* unknown-bit */
@@ -132,10 +137,12 @@ ts_crack_offset(const void *const *restrict src, size_t slen,
     /* Create "bucket" as array of bitmasks to detect collision for the input
      * sources. Each index in the array corresponds to a quotient, and each
      * bit-position in that index's item corresponds to a remainder. */
-    size_t nbuckets = (1u << target_log) / TS_WIDTH_BITS;
+    size_t nbuckets = (1U << target_log) / TS_WIDTH_BITS;
     if (nbuckets == 0) {
         nbuckets++;
     }
+    /* There are enough bucket slots for everyone. */
+    assert(nbuckets * TS_WIDTH_BITS >= (1U << target_log));
 
     size_t bucket_bytes = nbuckets * sizeof(uintptr_t);
     uintptr_t *const bucket_array = malloc(bucket_bytes);
@@ -144,7 +151,11 @@ ts_crack_offset(const void *const *restrict src, size_t slen,
     }
 
     struct ts_param trial_param;
+
+    /* Target size cannot exceed the maximum allowed by uintprt_t */
+    assert(TS_WIDTH_BITS > target_log);
     trial_param.log_size_compl = TS_WIDTH_BITS - target_log;
+
     for (offset = 0; offset < TS_WIDTH_BITS; offset++) {
         _Bool no_collision = 1;
         memset(bucket_array, 0, bucket_bytes);
@@ -155,6 +166,8 @@ ts_crack_offset(const void *const *restrict src, size_t slen,
             /* Put into bucket by division with platform pointer-width. */
             unsigned int bi = ix >> LOG_WIDTH;              /* quotient */
             unsigned int bpos = ix & (TS_WIDTH_BITS - 1);   /* remainder */
+            /* Shift by bpos is always safe */
+            assert(bpos < TS_WIDTH_BITS);
             uintptr_t flag = 1 << bpos;
             if (!(bucket_array[bi] & flag)) {
                 bucket_array[bi] |= flag;
@@ -167,6 +180,8 @@ ts_crack_offset(const void *const *restrict src, size_t slen,
         }
         if (no_collision) {
             res = offset;
+            /* "no_collision" means it. */
+            assert(res >= 0);
             goto cleanup;
         }
     }
@@ -184,6 +199,7 @@ cleanup:
 static TinySet *
 ts_create(const void *const *restrict src, size_t slen)
 {
+    assert(slen != 0);
     int k = -1;         /* Trial value of offset. */
     unsigned int tlog;  /* Trial value of logarithm of table-size. */
     /* Augment table size, starting from the power of two not smaller than the
@@ -200,9 +216,16 @@ ts_create(const void *const *restrict src, size_t slen)
         return NULL;
     }
 
-    size_t tlen = 1u << tlog;  /* True sparse-table length. */
+    /* It is always OK to shift by tlog or its complement (TS_WIDTH_BITS -
+     * tlog); the latter is used in the hash function body. */
+    assert(tlog < TS_WIDTH_BITS);
+    assert(tlog > 0);
+    size_t tlen = 1U << tlog;  /* True sparse-table length. */
     struct ts_param param_solution = {(unsigned int)k, TS_WIDTH_BITS - tlog};
 
+    /* The length we found, if at all, is always good for allocation and
+     * indexing. */
+    assert(tlen >= slen);
     const void **arr = PyMem_Malloc(tlen * sizeof(const void *));
     if (!arr) {
         return NULL;
@@ -221,6 +244,8 @@ ts_create(const void *const *restrict src, size_t slen)
      * re-computation but only once. */
     for (size_t i = 0; i < slen; i++) {
         unsigned int index = ts_get_index(src[i], &param_solution);
+        /* May not be obvious: the index returned is always within bounds. */
+        assert(index < tlen);
         arr[index] = src[i];
     }
     ts->hash_context = param_solution;
@@ -241,6 +266,9 @@ static _Bool
 ts_has_elem(const TinySet *restrict s, const void *restrict elem)
 {
     unsigned int index = ts_get_index(elem, &(s->hash_context));
+    /* Maybe not obvious: the index is always within array bounds, no matter if
+     * elem is in or not. */
+    assert(index < (1U << (TS_WIDTH_BITS - s->hash_context.log_size_compl)));
     return !((uintptr_t)(s->array[index]) ^ (uintptr_t)elem);
 }
 #endif /* TINYSET_C */
