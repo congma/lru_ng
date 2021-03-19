@@ -5,6 +5,12 @@
  * agents from the head; see CPython's Modules/_queuemodule.c for reference. */
 
 
+#ifdef __GNUC__
+extern PyObject * PyObject_CallFunctionObjArgs(PyObject *, ...)
+__attribute__((sentinel));
+#endif
+
+
 struct _pq_sinfo {
     Py_ssize_t head;
     Py_ssize_t tail;
