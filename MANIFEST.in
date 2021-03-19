@@ -1,1 +1,2 @@
 include CONTRIBUTORS COPYING README.md
+recursive-include src *.c *.h
