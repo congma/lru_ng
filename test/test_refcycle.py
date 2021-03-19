@@ -24,6 +24,9 @@ class TestYagotWorks(TestCase):
     def test_garbage(self):
         k = K()
         k.other = k
+        # Notice that this will emit a spurious ResourceWarning if dev mode is
+        # turned on; this is by design. The "uncollectible" object refers to
+        # the garbage created here deliberately and captured by Yagot.
 
 
 class TestRefCycle(TestCase):
