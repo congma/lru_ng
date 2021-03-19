@@ -16,9 +16,8 @@ The module relies on the :term:`global interpreter lock` (GIL) to maintain the
 consistency of internal data structures. Internally, the building blocks are
 mostly normal Python objects, although they're accessed and modified via the C
 API. The GIL is expected to be held by the method caller, so that accesses are
-sequentialized as a result of the GIL's functioning. When a thread is using a
-method, it can be certain that no other thread is modifying the data at the
-same time.
+ordered as a result of the GIL's functioning. When a thread is using a method,
+it can be certain that no other thread is modifying the data at the same time.
 
 However, there are four places where the protection is not perfect. These are
 the :ref:`callback <introduction:using a callback>`, the key's
@@ -35,10 +34,10 @@ example, when input/output (I/O) is performed. Some code may drop the GIL when
 computing the hash by a C extension on an internal :term:`buffer <bytes-like
 object>` for speed. Even if :meth:`~object.__hash__` may be made to execute
 before entering the critical section (relying on not-so-public Python C API),
-:meth:`~object.__eq__` currently cannot be. When a thread-switch happens as a
-result of them in the middle of a method call, another thread may try to call
-into a method, too, causing contention.  There's limited built-in ability to
-detect this at run-time, but currently,
+:meth:`~object.__eq__` currently cannot be. When a thread-switch happens in the
+middle of a method call, another thread may try to call into a method, too,
+causing contention.  There's limited built-in ability to detect this at
+run-time, but currently,
 
 .. warning::
 
