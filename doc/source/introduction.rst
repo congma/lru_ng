@@ -31,21 +31,21 @@ discarded items for reuse, among others.
 Installation
 ************
 
-This extension is written in C and intended for CPython >= 3.6. The following
-are required for compiling and installing the extension:
+The latest version's source is available from the PyPI, and you can install it
+using the ``pip`` command:
+
+.. code-block:: sh
+
+   pip install lru_ng
+
+The ``pip`` utility will download the C source and try to build a binary
+distribution. For this to work, you need CPython >= 3.6. The following are
+required for compilation:
 
 * A C compiler that supports C99 syntax
 * Python development headers
 * `setuptools <https://pypi.org/project/setuptools/>`_, although
   :mod:`distutils` included with Python should work, too.
-
-In the root director of the source package, the command
-
-.. code-block:: sh
-
-   pip install .
-
-shall build and install the package.
 
 
 First example

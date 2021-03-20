@@ -51,6 +51,12 @@ The pages are now under the `doc/build/html` path, and the home page is
 Installation
 ============
 
+You can install the latest version from PyPI using `pip`.
+
+```shell
+pip install -U lru_ng
+```
+
 Requirements:
 
 - CPython >= 3.6.
@@ -58,10 +64,10 @@ Requirements:
 - Python development headers.
 - [`setuptools`](https://github.com/pypa/setuptools)
 
-In the repository directory, running the command
+To build and install a snapshot version, you can issue the command
 
 ```shell
-pip install .
+python setup.py wheel
 ```
 
-will build and install the package.
+in the repository directory and install the wheel with `pip`.

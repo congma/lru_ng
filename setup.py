@@ -25,7 +25,10 @@ setup(name="lru_ng",
                         " least-recently used items when the capacity is"
                         " filled.\n"
                         "This extension class is largely compatible with the"
-                        " lru.LRU type."),
+                        " lru.LRU type.\n"
+                        "For more information, please visit the project"
+                        " homepage: https://github.com/congma/lru_ng"),
+      long_description_content_type="text/plain",
       platforms="OS Independent",
       author="Cong Ma",
       author_email="m.cong@protonmail.ch",
