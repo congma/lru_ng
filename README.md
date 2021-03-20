@@ -3,6 +3,7 @@ vim: spell spelllang=en
 -->
 [![GitHub CI](https://github.com/congma/lru_ng/actions/workflows/main.yml/badge.svg)](https://github.com/congma/lru_ng/actions/workflows/main.yml)
 [![Travis-CI.com status](https://travis-ci.com/congma/lru_ng.svg?branch=devel)](https://travis-ci.com/congma/lru_ng)
+[![Coverity Scan Build Status](https://scan.coverity.com/projects/22804/badge.svg)](https://scan.coverity.com/projects/congma-lru_ng)
 [![Documentation Status](https://readthedocs.org/projects/lru-ng/badge/?version=latest)](https://lru-ng.readthedocs.io/en/latest/)
 
 
