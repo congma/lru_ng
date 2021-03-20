@@ -1,2 +1,7 @@
 include CONTRIBUTORS COPYING README.md
-recursive-include src *.c *.h
+graft src
+prune dev
+global-exclude *.py[cod]
+global-exclude *.s?o
+global-exclude *.dll
+global-exclude *.dylib
