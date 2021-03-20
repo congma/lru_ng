@@ -1822,10 +1822,12 @@ LRU_tp_clear(LRUDict *self)
              * teardown. This is a very abnormal situation, but otherwise the
              * refcount to the list is still held by anything operating on the
              * list. */
+            PyObject *exc_type, *exc_value, *tb;
+            PyErr_Fetch(&exc_type, &exc_value, &tb);
             PyErr_SetString(PyExc_RuntimeError,
                             "lru_ng.LRUDict: purge queue busy at teardown.");
             PyErr_WriteUnraisable(self->purge_queue->lst);
-            PyErr_Clear();
+            PyErr_Restore(exc_type, exc_value, tb);
         }
         self->purge_queue = NULL;
     }

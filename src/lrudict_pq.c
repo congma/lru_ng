@@ -44,17 +44,21 @@ lrupq_new(void)
 
 /* DECREF the underlying list and free the memory space of the purge-queue
  * struct. Return 0 on success or -1 on error (typically because somehow a
- * callback cannot leave the purging procedure). Since each pass on the list
- * temporarily INCREF's the list itself, this will only drop the ref owned
- * on behalf of the owing LRUDict object. */
+ * callback cannot leave the purging procedure). On error, the underlying
+ * structure is not modified. Since each pass on the list temporarily INCREF's
+ * the list itself, this will only drop the ref owned on behalf of the owing
+ * LRUDict object. */
 int
 lrupq_free(LRUDict_pq *q)
 {
-    int status = q->n_active > 0 ? -1 : 0;
-
-    Py_CLEAR(q->lst);
-    PyMem_Free(q);
-    return status;
+    if (q->n_active > 0) {
+        return -1;
+    }
+    else {
+        Py_CLEAR(q->lst);
+        PyMem_Free(q);
+        return 0;
+    }
 }
 
 
