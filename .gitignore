@@ -53,6 +53,9 @@ MANIFEST
 *.manifest
 *.spec
 
+# Coverity
+cov-int/
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
