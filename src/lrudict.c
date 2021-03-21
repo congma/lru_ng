@@ -19,33 +19,19 @@ static TinySet *lru_safe_types;
 
 /*
  * This is an implementation of LRUDict that uses a Python dict and an
- * associated doubly linked list to keep track of recently inserted/accessed
- * items.
+ * associated circular doubly linked list to keep track of recently
+ * inserted/accessed items.
  *
  * Dict will store: key -> Node mapping, where Node is a linked list node.
  * The Node itself will contain the value as well as the key.
  *
- * For eg:
- *
- * >>> l = LRUDict(2)
- * >>> l[0] = 'foo'
- * >>> l[1] = 'bar'
- *
- * can be visualised as:
- *
- *                 -+-hash(0)-+-   -+-hash(1)-+-
- * self->dict   ... |         | ... |         | ...
- *                 -+----|----+-   -+----|----+-
- *                       :               :
- *                +------v-----+   +-----v------+
- * self->last --->|<'foo'>, <0>|-->|<'bar'>, <1>|---> NULL
- *       NULL <---|            |<--|            |<--- self->first
- *                +------------+   +------------+
- *
- *  The invariant is to maintain the list to reflect the LRU order of items in
- *  the dict.  self->first will point to the MRU item and self->last to LRU
- *  item. Size of list will not grow beyond size of the dict.
- *
+ * A special node, self->root, is allocated with unique identity. It is never
+ * deallocated throughout the lifetime of self, and it is never added to the
+ * dict. Consequently, any node obtained from the dict cannot be the root node.
+ * The linked list begins from the root node and wraps around to it. If there
+ * are no additional nodes, the root node's prev and next pointers point to
+ * itself. This enables mostly branchless code with linked-list operations by
+ * eliminating a class of comparisons before dereferencing.
  */
 
 
@@ -120,75 +106,49 @@ do {                            \
 
 
 /* Linked-list data-structure implementations internal to LRUDict */
-/* Generic node-detach; node must already be a member. After detach the node's
- * link pointers contain garabage. */
+#define FIRST_NODE(s)        ((s)->root->next)
+#define LAST_NODE(s)         ((s)->root->prev)
+#define IS_VALID_NODE_IN(s, n)  ((n) != (s)->root)
+
+
+/* Generic node-detach; node must already be a member and not root. After
+ * detach the node's link pointers contain garabage. */
 static inline void
-lru_detach_node(LRUDict *self, Node *node)
+lru_detach_node(const Node *restrict node)
 {
-    assert(node != NULL);
+    Node *n_prev = node->prev;
+    Node *n_next = node->next;
 
-    if (node->prev != NULL) {
-        node->prev->next = node->next;
-    }
-    else {
-        assert(self->first == node);
-        self->first = node->next;
-    }
-
-    if (node->next != NULL) {
-        node->next->prev = node->prev;
-    }
-    else {
-        assert(self->last == node);
-        self->last = node->prev;
-    }
+    n_next->prev = n_prev;
+    n_prev->next = n_next;
 }
 
 
 /* Generic attach (at head/first); node must be a non-aliased, well-formed Node
- * object that's not yet a member. */
+ * object that's not a member. */
 static inline void
-lru_attach_node(LRUDict *self, Node *node)
+lru_attach_node_after(Node *restrict origin, Node *restrict node)
 {
-    assert(node != NULL);
-    node->prev = NULL;
-    if ((node->next = self->first) != NULL) {
-        node->next->prev = node;
-    }
-    else {  /* List is empty; also set last. */
-        assert(self->last == NULL);
-        self->last = node;
-    }
-    self->first = node;
+    Node *o_next = origin->next;
+
+    node->prev = origin;
+    node->next = o_next;
+    origin->next = node;
+    o_next->prev = node;
 }
 
 
 /* Promote node to first. node must already be a member. (Semantically
- * equivalent to a detach followed by an attach; this saves a comparison.) Skip
- * entirely if node is already first. */
+ * equivalent to a detach followed by an attach; this uses a comparison to skip
+ * it entirely if node is already first.) */
 static inline void
-lru_promote_node(LRUDict *self, Node *node)
+lru_promote_node(const LRUDict *self, Node *node)
 {
-    if (node->prev == NULL) {
-        /* node is already first */
-        assert(node == self->first);
+    if (node == FIRST_NODE(self)) {
         return;
     }
-
-    /* detach */
-    if ((node->prev->next = node->next) != NULL) {
-        node->next->prev = node->prev;
-    }
-    else {  /* node is last */
-        assert(self->last == node);
-        self->last = node->prev;
-    }
-    /* attach back at head (first) */
-    node->prev = NULL;
-    node->next = self->first;
-    assert(self->first->prev == NULL);
-    self->first->prev = node;
-    self->first = node;
+    lru_detach_node(node);
+    lru_attach_node_after(self->root, node);
 }
 
 
@@ -217,13 +177,12 @@ lrupq_push(LRUDict_pq *q, PyObject *restrict obj)
 }
 
 
-/* Can only be called while there's actually a node to delete (evict), such
- * that self->last != NULL.  */
+/* Can only be called while there's actually a node to delete (evict) */
 static void
 lru_delete_last_impl(LRUDict *self)
 {
-    Node *n = self->last;
-    assert(n != NULL);
+    Node *n = LAST_NODE(self);
+    assert(IS_VALID_NODE_IN(self, n));
 
     /* Transfer the node to purge queue.
      * This transfer is not merely conditional on self->callback being set or
@@ -233,11 +192,8 @@ lru_delete_last_impl(LRUDict *self)
     Py_INCREF(n);
     if (_PyDict_DelItem_KnownHash(self->dict, n->pl.key, n->pl.key_hash) == 0)
     {
-        /* detach; n->prev is never NULL because the only item cannot be
-         * evicted. */
-        assert(n->prev != NULL);
-        self->last = n->prev;
-        self->last->next = NULL;
+        /* detach; n is never root because the only item cannot be evicted. */
+        lru_detach_node(n);
         /* The list will increase the refcount to the node if successful */
         if (self->callback ||
             (lru_decref_unsafe(n->pl.key) | lru_decref_unsafe(n->pl.value)))
@@ -636,7 +592,7 @@ lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh, Node **node_ref)
     if (res == 0) {
         /* If dict item-deletion succeed, detach from queue and keep this ref
          * for the output parameter. */
-        lru_detach_node(self, *node_ref);
+        lru_detach_node(*node_ref);
     }
     else {
         /* If dict item-deletion fail, rewind the INCREF so there's no net
@@ -660,8 +616,8 @@ lru_insert_new_node_impl(LRUDict *self, Node *node)
                                     (PyObject *)node,
                                     node->pl.key_hash);
     if (res == 0) {
-        assert(self->first != node);
-        lru_attach_node(self, node);
+        assert(self->root != node);
+        lru_attach_node_after(self->root, node);
     }
 
     if (lru_length_impl(self) > self->size) {
@@ -811,9 +767,9 @@ collect(LRUDict *self, PyObject * (*getterfunc)(const Node *restrict))
         return NULL;
     }
 
-    curr = self->first;
+    curr = FIRST_NODE(self);
     Py_ssize_t i = 0;
-    while (curr != NULL) {
+    while (IS_VALID_NODE_IN(self, curr)) {
         PyObject * obj;
 
         if ((obj = getterfunc(curr)) != NULL) {
@@ -1197,7 +1153,7 @@ LRU_pop(LRUDict *self, PyObject *args)
     if (ret_node) {
         /* ret_node != NULL, delete it, unbox, and return value */
         /* lru_hit_impl will do a promotion; don't use it. */
-        lru_detach_node(self, ret_node);
+        lru_detach_node(ret_node);
         Py_INCREF(ret_node->pl.value);
         result = ret_node->pl.value;
         self->hits++;
@@ -1237,9 +1193,9 @@ LRU_popitem(LRUDict *self, PyObject *args)
     /* Assignment method, must protect */
     LRU_ENTER_CRIT(self, NULL);
 
-    node = pop_least_recent ? self->last : self->first;
+    node = pop_least_recent ? LAST_NODE(self) : FIRST_NODE(self);
     /* item_to_pop is new reference if not NULL */
-    item_to_pop = node ? get_item(node) : NULL;
+    item_to_pop = IS_VALID_NODE_IN(self, node) ? get_item(node) : NULL;
     if (item_to_pop == NULL) {
         PyErr_SetString(PyExc_KeyError, "popitem(): LRUDict is empty");
         LRU_LEAVE_CRIT(self);
@@ -1250,7 +1206,7 @@ LRU_popitem(LRUDict *self, PyObject *args)
     if (_PyDict_DelItem_KnownHash(self->dict,
                                   node->pl.key, node->pl.key_hash) == 0)
     {
-        lru_detach_node(self, node);
+        lru_detach_node(node);
     }
     else {
         /* Somehow fails to delete from dict, item_to_pop becomes useless */
@@ -1271,8 +1227,9 @@ LRU_clear(LRUDict *self, PyObject *Py_UNUSED(ignored))
     /* Optimization hack: just let nodes go out of lifecycle by PyDict_Clear()
      * (out of critical section; for fear of triggering the __del__ of objects
      * referenced by nodes in turn), and let dealloc handle them. We can re-set
-     * self->first, self->last and don't have to delink one by one. */
-    self->first = self->last = NULL;
+     * the root's prev/next links and don't have to delink one by one. */
+    assert(self->root != NULL);
+    FIRST_NODE(self) = LAST_NODE(self) = self->root;
     self->hits = 0;
     self->misses = 0;
     LRU_LEAVE_CRIT(self);
@@ -1290,8 +1247,9 @@ LRU_peek_first_item(LRUDict *self, PyObject *Py_UNUSED(ignored))
     PyObject *result;
 
     /* "peek" doesn't change dict content or node order */
-    if (self->first != NULL) {
-        result = get_item(self->first); /* New reference */
+    Node *first = FIRST_NODE(self);
+    if (IS_VALID_NODE_IN(self, first)) {
+        result = get_item(first); /* New reference */
         if (result == NULL) {
             return result;
         }
@@ -1311,8 +1269,9 @@ LRU_peek_last_item(LRUDict *self, PyObject *Py_UNUSED(ignored))
     PyObject *result;
 
     /* "peek" doesn't change dict content or node order */
-    if (self->last != NULL) {
-        result = get_item(self->last);  /* New reference */
+    Node *last = LAST_NODE(self);
+    if (IS_VALID_NODE_IN(self, last)) {
+        result = get_item(last);  /* New reference */
         if (result == NULL) {
             return result;
         }
@@ -1333,14 +1292,14 @@ LRU_to_dict(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *dst;
     int status = 0;
-    const Node *n = self->last;
+    const Node *n = LAST_NODE(self);
 
     if ((dst = PyDict_New()) == NULL) {
         return NULL;
     }
 
     LRU_ENTER_CRIT(self, NULL);
-    while (n != NULL) {
+    while (IS_VALID_NODE_IN(self, n)) {
         status = _PyDict_SetItem_KnownHash(dst,
                                            n->pl.key,
                                            n->pl.value,
@@ -1733,7 +1692,16 @@ LRU_init(LRUDict *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    self->first = self->last = NULL;
+    /* Allocate a special node as root. */
+    NodePayload rootpl = {Py_None, Py_None, get_hash(Py_None)};
+    Node *root_node = node_getnewfrom(&rootpl);
+    if (root_node == NULL) {
+        self->root = NULL;
+        return -1;
+    }
+    root_node->prev = root_node->next = root_node;
+    self->root = root_node;
+
     self->hits = 0;
     self->misses = 0;
     self->purge_suspended = 0;
@@ -1777,9 +1745,9 @@ LRU_fini(LRUDict *self)
 static int
 LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 {
-    Node *cur = self->last;
+    Node *cur = LAST_NODE(self);
 
-    while (cur) {
+    while (IS_VALID_NODE_IN(self, cur)) {
         Py_VISIT(cur->pl.key);
         Py_VISIT(cur->pl.value);
         cur = cur->prev;
@@ -1812,9 +1780,10 @@ LRU_tp_clear(LRUDict *self)
     if (self->dict) {
         self->internal_busy = 0;
         /* Will NOT call callback on any staging elems. */
-        LRU_clear(self, NULL);
+        PyDict_Clear(self->dict);
         Py_CLEAR(self->dict);
     }
+
     if (self->purge_queue) {
         /* Release purge queue */
         if (lrupq_free(self->purge_queue) == -1) {
@@ -1831,6 +1800,7 @@ LRU_tp_clear(LRUDict *self)
         }
         self->purge_queue = NULL;
     }
+
     /* Dispose of reference to callback if any. */
     Py_CLEAR(self->callback);
     return 0;
@@ -1849,6 +1819,7 @@ LRU_dealloc(LRUDict *self)
     PyObject_GC_UnTrack((PyObject *)self);
 
     LRU_tp_clear(self);
+    Py_CLEAR(self->root);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 

@@ -50,8 +50,7 @@ typedef struct _LRUDict {
     PyObject_HEAD
     PyObject *dict;
     Py_ssize_t size;
-    Node *first;
-    Node *last;
+    Node *root;
     unsigned long hits;
     unsigned long misses;
     LRUDict_pq *purge_queue;
