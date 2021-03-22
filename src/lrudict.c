@@ -261,7 +261,7 @@ LRU_length(LRUDict *self)
 static PyObject *
 LRU_size_getter(LRUDict *self, void *Py_UNUSED(closure))
 {
-    return PyLong_FromSsize_t(self->size);
+    return PyLong_FromSsize_t(self->capacity);
 }
 
 
@@ -276,7 +276,7 @@ static inline int
 lru_set_size_impl(LRUDict *self, Py_ssize_t n)
 {
     if (n > 0) {
-        self->size = n;
+        self->capacity = n;
         for (Py_ssize_t i = lru_length_impl(self) - n; i > 0; i--) {
             lru_delete_last_impl(self);
         }
@@ -627,7 +627,7 @@ lru_insert_new_node_impl(LRUDict *self, Node *restrict node)
         lru_attach_node_after(self->root, node);
     }
 
-    if (lru_length_impl(self) > self->size) {
+    if (lru_length_impl(self) > self->capacity) {
         lru_delete_last_impl(self);
     }
 
@@ -1654,7 +1654,7 @@ LRU_repr(LRUDict *self)
     cb_repr = lru_cbrepr(self->callback);
     self_repr = PyUnicode_FromFormat(
             "<LRUDict(%zd%V) object with dict %V at %p>",
-            self->size,
+            self->capacity,
             cb_repr, ", callback=<error formatting repr>",
             dict_repr, "<error formatting repr>",
             self);

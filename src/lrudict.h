@@ -52,7 +52,7 @@ typedef struct _LRUDict {
     Node *root;
     unsigned long misses;
     unsigned long hits;
-    Py_ssize_t size;
+    Py_ssize_t capacity;
     PyObject *callback;
     LRUDict_pq *purge_queue;
     _Bool _pb;
