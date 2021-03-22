@@ -38,8 +38,8 @@ typedef struct _NodePayload {
 
 typedef struct _Node {
     PyObject_HEAD
-    struct _Node *prev;
     struct _Node *next;
+    struct _Node *prev;
     NodePayload pl;
 } Node;
 
@@ -49,13 +49,12 @@ typedef struct _Node {
 typedef struct _LRUDict {
     PyObject_HEAD
     PyObject *dict;
-    Py_ssize_t size;
-    Node *first;
-    Node *last;
-    unsigned long hits;
+    Node *root;
     unsigned long misses;
-    LRUDict_pq *purge_queue;
+    unsigned long hits;
+    Py_ssize_t capacity;
     PyObject *callback;
+    LRUDict_pq *purge_queue;
     _Bool _pb;
     _Bool detect_conflict:1;
     _Bool internal_busy:1;
@@ -86,6 +85,11 @@ struct _dictkeysobject {
 
 #ifndef DKIX_ERROR
 #define DKIX_ERROR ((Py_ssize_t)(-3))
+#endif
+
+
+#ifndef PyDict_GET_SIZE
+#define PyDict_GET_SIZE(d)  (((PyDictObject *)(d))->ma_used)
 #endif
 
 
