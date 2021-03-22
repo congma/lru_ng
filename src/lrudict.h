@@ -88,4 +88,9 @@ struct _dictkeysobject {
 #endif
 
 
+#ifndef PyDict_GET_SIZE
+#define PyDict_GET_SIZE(d)  (((PyDictObject *)(d))->ma_used)
+#endif
+
+
 #endif
