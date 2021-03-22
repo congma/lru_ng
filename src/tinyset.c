@@ -145,7 +145,7 @@ ts_crack_offset(const void *const *restrict src, size_t slen,
     assert(nbuckets * TS_WIDTH_BITS >= (1U << target_log));
 
     size_t bucket_bytes = nbuckets * sizeof(uintptr_t);
-    uintptr_t *const bucket_array = malloc(bucket_bytes);
+    uintptr_t *const bucket_array = PyMem_Malloc(bucket_bytes);
     if (!bucket_array) {
         return -1;
     }
@@ -188,7 +188,7 @@ ts_crack_offset(const void *const *restrict src, size_t slen,
     /* not found */
     res = -1;
 cleanup:
-    free(bucket_array);
+    PyMem_Free(bucket_array);
     return res;
 }
 
