@@ -49,12 +49,12 @@ typedef struct _Node {
 typedef struct _LRUDict {
     PyObject_HEAD
     PyObject *dict;
-    Py_ssize_t size;
     Node *root;
-    unsigned long hits;
     unsigned long misses;
-    LRUDict_pq *purge_queue;
+    unsigned long hits;
+    Py_ssize_t size;
     PyObject *callback;
+    LRUDict_pq *purge_queue;
     _Bool _pb;
     _Bool detect_conflict:1;
     _Bool internal_busy:1;

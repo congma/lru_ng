@@ -1753,12 +1753,12 @@ LRU_fini(LRUDict *self)
 static int
 LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 {
-    Node *cur = LAST_NODE(self);
+    Node *cur = FIRST_NODE(self);
 
     while (IS_VALID_NODE_IN(self, cur)) {
         Py_VISIT(cur->pl.key);
         Py_VISIT(cur->pl.value);
-        cur = cur->prev;
+        cur = cur->next;
     }
 
     if (self->purge_queue && self->purge_queue->lst) {
