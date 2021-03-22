@@ -116,8 +116,11 @@ do {                            \
 static inline void
 lru_detach_node(const Node *restrict node)
 {
-    Node *n_prev = node->prev;
+    /* These two may point to the same thing but never "node" itself */
     Node *n_next = node->next;
+    Node *n_prev = node->prev;
+    assert(n_next != node);
+    assert(n_prev != node);
 
     n_next->prev = n_prev;
     n_prev->next = n_next;
@@ -129,12 +132,14 @@ lru_detach_node(const Node *restrict node)
 static inline void
 lru_attach_node_after(Node *restrict origin, Node *restrict node)
 {
-    Node *o_next = origin->next;
+    Node *o_next = origin->next;  /* this thing may be the same as origin */
+    assert(node != origin);
+    assert(node != o_next);
 
-    node->prev = origin;
-    node->next = o_next;
-    origin->next = node;
     o_next->prev = node;
+    node->next = o_next;
+    node->prev = origin;
+    origin->next = node;
 }
 
 
@@ -165,9 +170,9 @@ lru_decref_unsafe(const PyObject *obj)
 
 
 static inline int
-lrupq_push(LRUDict_pq *q, PyObject *restrict obj)
+lrupq_push(LRUDict_pq *q, Node *restrict n)
 {
-    if (PyList_Append(q->lst, obj) == 0) {
+    if (PyList_Append(q->lst, (PyObject *restrict)n) == 0) {
         q->sinfo.tail++;
         return 0;
     }
@@ -198,7 +203,7 @@ lru_delete_last_impl(LRUDict *self)
         if (self->callback ||
             (lru_decref_unsafe(n->pl.key) | lru_decref_unsafe(n->pl.value)))
         {
-            if (lrupq_push(self->purge_queue, (PyObject *)n) == 0) {
+            if (lrupq_push(self->purge_queue, n) == 0) {
                 self->_pb = 1;
             }
         }
@@ -235,9 +240,9 @@ lru_purge_staging_impl(LRUDict *self, purge_mode_t opt)
 
 /* Querying length information (Python __len__ or len() function) */
 static inline Py_ssize_t
-lru_length_impl(LRUDict *self)
+lru_length_impl(const LRUDict *self)
 {
-    return ((PyDictObject*)(self->dict))->ma_used;
+    return PyDict_GET_SIZE(self->dict);
 }
 
 
@@ -483,7 +488,7 @@ get_hash(PyObject *k)
 
 static inline Py_ssize_t
 direct_lookup(PyObject *restrict d, PyObject *restrict key, Py_hash_t kh,
-              Node **node_ref)
+              Node **restrict node_ref)
 {
     PyDictObject *mp = (PyDictObject *)d;
 #if PY_VERSION_HEX >= 0x03070000
@@ -570,7 +575,7 @@ LRU_subscript(LRUDict *self, PyObject *key)
 static inline int
 lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh, Node **node_ref)
 {
-    /* identify the node to pop by borrowing a ref by key-keyhash. if not, set
+    /* Identify the node to pop by borrowing a ref by key-keyhash. if not, set
      * exception. */
     int res;
     Py_ssize_t index;
@@ -606,17 +611,15 @@ lru_popnode_impl(LRUDict *self, PyObject *key, Py_hash_t kh, Node **node_ref)
 /* Insert a (well-formed, already-allocated, not-aliased-to-existing) Node
  * object. */
 static inline int
-lru_insert_new_node_impl(LRUDict *self, Node *node)
+lru_insert_new_node_impl(LRUDict *self, Node *restrict node)
 {
     int res;
 
-    assert(node != NULL);
     res = _PyDict_SetItem_KnownHash(self->dict,
                                     node->pl.key,
-                                    (PyObject *)node,
+                                    (PyObject *restrict)node,
                                     node->pl.key_hash);
     if (res == 0) {
-        assert(self->root != node);
         lru_attach_node_after(self->root, node);
     }
 
@@ -681,6 +684,7 @@ lru_push_impl(LRUDict *self, const NodePayload *restrict payload,
          * DECREF is expected to be done by the caller after leaving the
          * critical section. */
         Py_INCREF(payload->value);
+        /* XXX: Is it worth it to skip replacing the identical value? */
         *oldvalue_ref = n->pl.value;
         n->pl.value = payload->value;
         /* Promote node to first. */
@@ -1692,14 +1696,18 @@ LRU_init(LRUDict *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    /* Allocate a special node as root. */
-    NodePayload rootpl = {Py_None, Py_None, get_hash(Py_None)};
+    /* Allocate a special node as root; The specific value doens't matter as
+     * long as it is something that can be safely DECREF'ed (so that no special
+     * case needs to go in node_dealloc. The hash doesn't matter, and -1 may be
+     * useful to cause early fail in the case that the root got erroneously
+     * inserted. */
+    NodePayload rootpl = {Py_None, Py_None, -1};
     Node *root_node = node_getnewfrom(&rootpl);
     if (root_node == NULL) {
         self->root = NULL;
         return -1;
     }
-    root_node->prev = root_node->next = root_node;
+    root_node->next = root_node->prev = root_node;
     self->root = root_node;
 
     self->hits = 0;

@@ -38,8 +38,8 @@ typedef struct _NodePayload {
 
 typedef struct _Node {
     PyObject_HEAD
-    struct _Node *prev;
     struct _Node *next;
+    struct _Node *prev;
     NodePayload pl;
 } Node;
 
