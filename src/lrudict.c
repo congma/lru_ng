@@ -31,7 +31,11 @@ static TinySet *lru_safe_types;
  * The linked list begins from the root node and wraps around to it. If there
  * are no additional nodes, the root node's prev and next pointers point to
  * itself. This enables mostly branchless code with linked-list operations by
- * eliminating a class of comparisons before dereferencing.
+ * eliminating a class of comparisons before dereferencing. (This is slightly
+ * different from the _functoolsmodule.c implementation where the self is truly
+ * intruded by the node links so that some dereferences can be saved; we opt
+ * for a compromise, partly because of the expressive power with fewer type
+ * casts.)
  */
 
 
