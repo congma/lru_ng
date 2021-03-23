@@ -762,27 +762,30 @@ static PyMappingMethods LRU_as_mapping = {
 };
 
 
-/* Create lists for keys, values, or key-value pairs */
+/* Function that convert node to new reference to Python object. */
+typedef PyObject * (*lru_node_reader_func)(const Node *restrict);
+/* Create lists for keys, values, or key-value pairs, from the first (MRU) to
+ * the last (LRU) item. */
 static PyObject *
-collect(LRUDict *self, PyObject * (*getterfunc)(const Node *restrict))
+lru_list_ftl(const LRUDict *self, lru_node_reader_func fcn)
 {
-    PyObject *v;
-    const Node *curr;
+    const Node *cur;
     const Py_ssize_t len = lru_length_impl(self);
+    PyObject *v;  /* Result list. */
 
-    v = PyList_New(len);
-    if (v == NULL) {
+    assert(len >= 0);
+    if (unlikely((v = PyList_New(len)) == NULL)) {
         return NULL;
     }
 
-    curr = FIRST_NODE(self);
+    cur = FIRST_NODE(self);
     Py_ssize_t i = 0;
-    while (IS_VALID_NODE_IN(self, curr)) {
-        PyObject * obj;
+    while (IS_VALID_NODE_IN(self, cur)) {
+        PyObject *obj;
 
-        if ((obj = getterfunc(curr)) != NULL) {
+        if ((obj = fcn(cur)) != NULL) {
             PyList_SET_ITEM(v, i++, obj);
-            curr = curr->next;
+            cur = cur->next;
         }
         else {
             goto fail;
@@ -797,8 +800,11 @@ fail:
 }
 
 
+#ifdef __GNUC__
+__attribute__((returns_nonnull))
+#endif
 static PyObject *
-get_key(const Node *restrict node)
+lru_node_key(const Node *restrict node)
 {
     Py_INCREF(node->pl.key);
     return node->pl.key;
@@ -811,14 +817,17 @@ LRU_keys(LRUDict *self, PyObject *Py_UNUSED(ignored))
     PyObject *result;
 
     LRU_ENTER_CRIT(self, NULL);
-    result = collect(self, get_key);
+    result = lru_list_ftl(self, lru_node_key);
     LRU_LEAVE_CRIT(self);
     return result;
 }
 
 
+#ifdef __GNUC__
+__attribute__((returns_nonnull))
+#endif
 static PyObject *
-get_value(const Node *restrict node)
+lru_node_value(const Node *restrict node)
 {
     Py_INCREF(node->pl.value);
     return node->pl.value;
@@ -831,20 +840,22 @@ LRU_values(LRUDict *self, PyObject *Py_UNUSED(ignored))
     PyObject *result;
 
     LRU_ENTER_CRIT(self, NULL);
-    result = collect(self, get_value);
+    result = lru_list_ftl(self, lru_node_value);
     LRU_LEAVE_CRIT(self);
     return result;
 }
 
 
 static PyObject *
-get_item(const Node *restrict node)
+lru_tuplify_node(const Node *restrict node)
 {
     PyObject *tuple = PyTuple_New(2);
-    Py_INCREF(node->pl.key);
-    Py_INCREF(node->pl.value);
-    PyTuple_SET_ITEM(tuple, 0, node->pl.key);
-    PyTuple_SET_ITEM(tuple, 1, node->pl.value);
+    if (tuple != NULL) {
+        Py_INCREF(node->pl.key);
+        Py_INCREF(node->pl.value);
+        PyTuple_SET_ITEM(tuple, 0, node->pl.key);
+        PyTuple_SET_ITEM(tuple, 1, node->pl.value);
+    }
     return tuple;
 }
 
@@ -855,7 +866,7 @@ LRU_items(LRUDict *self, PyObject *Py_UNUSED(ignored))
     PyObject *result;
 
     LRU_ENTER_CRIT(self, NULL);
-    result = collect(self, get_item);
+    result = lru_list_ftl(self, lru_tuplify_node);
     LRU_LEAVE_CRIT(self);
     return result;
 }
@@ -1203,7 +1214,7 @@ LRU_popitem(LRUDict *self, PyObject *args)
 
     node = pop_least_recent ? LAST_NODE(self) : FIRST_NODE(self);
     /* item_to_pop is new reference if not NULL */
-    item_to_pop = IS_VALID_NODE_IN(self, node) ? get_item(node) : NULL;
+    item_to_pop = IS_VALID_NODE_IN(self, node) ? lru_tuplify_node(node) : NULL;
     if (item_to_pop == NULL) {
         PyErr_SetString(PyExc_KeyError, "popitem(): LRUDict is empty");
         LRU_LEAVE_CRIT(self);
@@ -1238,8 +1249,8 @@ LRU_clear(LRUDict *self, PyObject *Py_UNUSED(ignored))
      * the root's prev/next links and don't have to delink one by one. */
     assert(self->root != NULL);
     FIRST_NODE(self) = LAST_NODE(self) = self->root;
-    self->hits = 0;
     self->misses = 0;
+    self->hits = 0;
     LRU_LEAVE_CRIT(self);
 
     PyDict_Clear(self->dict);   /* no return value (void) */
@@ -1248,48 +1259,37 @@ LRU_clear(LRUDict *self, PyObject *Py_UNUSED(ignored))
 }
 
 
-/* Methods specific to LRUDict */
-static PyObject *
-LRU_peek_first_item(LRUDict *self, PyObject *Py_UNUSED(ignored))
+/* Construct tuple from node's payload. Return new reference or NULL. */
+static inline PyObject *
+lru_peek_tuple(const LRUDict *self, const Node *node, const char *msg)
 {
     PyObject *result;
 
-    /* "peek" doesn't change dict content or node order */
-    Node *first = FIRST_NODE(self);
-    if (IS_VALID_NODE_IN(self, first)) {
-        result = get_item(first); /* New reference */
-        if (result == NULL) {
-            return result;
-        }
+    if (IS_VALID_NODE_IN(self, node)) {
+        result = lru_tuplify_node(node);   /* New reference or NULL */
     }
     else {
-        result = NULL;
-        PyErr_SetString(PyExc_KeyError, "peek_first_item(): LRUDict is empty");
+        /* Set KeyError and return NULL */
+        result = PyErr_Format(PyExc_KeyError, "%s: LRUDict instance is empty",
+                              msg);
     }
 
     return result;
 }
 
 
+/* Methods specific to LRUDict */
+static PyObject *
+LRU_peek_first_item(LRUDict *self, PyObject *Py_UNUSED(ignored))
+{
+    return lru_peek_tuple(self, FIRST_NODE(self), "peek_first_item()");
+}
+
+
 static PyObject *
 LRU_peek_last_item(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
-    PyObject *result;
-
-    /* "peek" doesn't change dict content or node order */
-    Node *last = LAST_NODE(self);
-    if (IS_VALID_NODE_IN(self, last)) {
-        result = get_item(last);  /* New reference */
-        if (result == NULL) {
-            return result;
-        }
-    }
-    else {
-        result = NULL;
-        PyErr_SetString(PyExc_KeyError, "peek_last_item(): LRUDict is empty");
-    }
-
-    return result;
+    return lru_peek_tuple(self, LAST_NODE(self), "peek_last_item()");
 }
 
 
