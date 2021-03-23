@@ -911,29 +911,20 @@ static inline int
 lru_update_fill_buffer(LRUDict *self, PyObject *src,
                        update_buf_t *restrict updbuf)
 {
-    PyObject *key;
-    PyObject *value;
-    Py_hash_t kh;
-    size_t i;
-    int ret_status;
+    size_t i = 0;
+    int ret_status = 1;
 
-    i = 0;
-    ret_status = 1;
     while (i < updbuf->len) {
-        int push_status;
-
         PyObject **restrict cur = updbuf->buf + i;
+        NodePayload pl;
 
-        if (PyDict_Next(src, &updbuf->pos, &key, &value)) {
-            if (unlikely((kh = get_hash(key)) == -1)) {
+        if (PyDict_Next(src, &updbuf->pos, &(pl.key), &(pl.value))) {
+            if (unlikely((pl.key_hash = get_hash(pl.key)) == -1)) {
                 ret_status = -1;
                 break;
             }
 
-            NodePayload pl = {key, value, kh};
-            push_status = lru_push_impl(self, &pl, cur);
-
-            if (unlikely(push_status != 0)) {
+            if (unlikely(lru_push_impl(self, &pl, cur) != 0)) {
                 ret_status = -1;
                 break;
             }
