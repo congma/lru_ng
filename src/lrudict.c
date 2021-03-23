@@ -434,18 +434,11 @@ lru_contains_impl(LRUDict *self, PyObject *key)
 static PyObject *
 LRU_contains(LRUDict *self, PyObject *key)
 {
-    int flag;
-
-    flag = lru_contains_impl(self, key);
-
-    if (flag == 1) {
-        Py_RETURN_TRUE;
-    }
-    else if (flag == 0) {
-        Py_RETURN_FALSE;
-    }
-    else {
-        return NULL;
+    switch (lru_contains_impl(self, key))
+    {
+        case 0: Py_RETURN_FALSE;
+        case 1: Py_RETURN_TRUE;
+        default: return NULL;
     }
 }
 
@@ -464,8 +457,10 @@ lru_hit_impl(LRUDict *self, Node *node)
 }
 
 
-/* Optimized hash getter code-path that uses the memoized hash for strings. See
- * CPython: Objects/dictobject.c */
+/* Optimized hash getter code-path that uses the memoized hash for ASCII
+ * strings. See CPython: Objects/dictobject.c
+ * This does more work for non-ASCII-strings but no more than what Python dict
+ * does. There's a real advantage for string keys. */
 static inline Py_hash_t
 get_hash(PyObject *k)
 {
@@ -745,9 +740,9 @@ static PySequenceMethods LRU_as_sequence = {
 
 /* Mapping methods structure */
 static PyMappingMethods LRU_as_mapping = {
-    (lenfunc)LRU_length,        /*mp_length*/
-    (binaryfunc)LRU_subscript,  /*mp_subscript*/
-    (objobjargproc)LRU_ass_sub, /*mp_ass_subscript*/
+    .mp_length = (lenfunc)LRU_length,
+    .mp_subscript = (binaryfunc)LRU_subscript,
+    .mp_ass_subscript = (objobjargproc)LRU_ass_sub,
 };
 
 
@@ -918,7 +913,7 @@ lru_update_fill_buffer(LRUDict *self, PyObject *src,
         PyObject **restrict cur = updbuf->buf + i;
         NodePayload pl;
 
-        if (PyDict_Next(src, &updbuf->pos, &(pl.key), &(pl.value))) {
+        if (PyDict_Next(src, &updbuf->pos, &pl.key, &pl.value)) {
             if (unlikely((pl.key_hash = get_hash(pl.key)) == -1)) {
                 ret_status = -1;
                 break;
@@ -1063,8 +1058,7 @@ cleanup:
 }
 
 
-/* Like dict.setdefault, this evaluates the hash function only once.
- * Should test: refcount of key and return value */
+/* Like dict.setdefault, this evaluates the hash function only once. */
 static PyObject *
 LRU_setdefault(LRUDict *self, PyObject *args)
 {
@@ -1258,7 +1252,7 @@ lru_peek_tuple(const LRUDict *self, const Node *node, const char *msg)
     if (IS_VALID_NODE_IN(self, node)) {
         result = lru_tuplify_node(node);   /* New reference or NULL */
     }
-    else {
+    else {  /* empty */
         /* Set KeyError and return NULL */
         result = PyErr_Format(PyExc_KeyError, "%s: LRUDict instance is empty",
                               msg);
@@ -1289,7 +1283,6 @@ static PyObject *
 LRU_to_dict(LRUDict *self, PyObject *Py_UNUSED(ignored))
 {
     PyObject *dst;
-    int status = 0;
     const Node *n = LAST_NODE(self);
 
     if ((dst = PyDict_New()) == NULL) {
@@ -1298,21 +1291,18 @@ LRU_to_dict(LRUDict *self, PyObject *Py_UNUSED(ignored))
 
     LRU_ENTER_CRIT(self, NULL);
     while (IS_VALID_NODE_IN(self, n)) {
-        status = _PyDict_SetItem_KnownHash(dst,
-                                           n->pl.key,
-                                           n->pl.value,
-                                           n->pl.key_hash);
+        int status = _PyDict_SetItem_KnownHash(dst,
+                                               n->pl.key,
+                                               n->pl.value,
+                                               n->pl.key_hash);
         if (unlikely(status == -1)) {
-            break;
+            LRU_LEAVE_CRIT(self);
+            Py_DECREF(dst);
+            return NULL;
         }
         n = n->prev;
     }
     LRU_LEAVE_CRIT(self);
-
-    if (unlikely(status == -1)) {
-        Py_DECREF(dst);
-        return NULL;
-    }
     return dst;
 }
 
@@ -1748,10 +1738,10 @@ static int
 LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 {
     PyObject *key;
-    Node *cur;
+    Node *restrict cur;
     Py_ssize_t pos = 0;
 
-    while(PyDict_Next(self->dict, &pos, &key, (PyObject **)&cur)) {
+    while(PyDict_Next(self->dict, &pos, &key, (PyObject **restrict)&cur)) {
         Py_VISIT(key);
         if (cur->pl.key != key) {
             Py_VISIT(cur->pl.key);
@@ -1762,7 +1752,7 @@ LRU_traverse(LRUDict *self, visitproc visit, void *arg)
     if (self->purge_queue && self->purge_queue->lst) {
         Py_ssize_t len = PyList_Size(self->purge_queue->lst);
         for (pos = 0; pos < len; pos++) {
-            Node *cur = (Node *)PyList_GET_ITEM(self->purge_queue->lst, pos);
+            cur = (Node *restrict)PyList_GET_ITEM(self->purge_queue->lst, pos);
             if (cur) {
                 Py_VISIT(cur->pl.key);
                 Py_VISIT(cur->pl.value);

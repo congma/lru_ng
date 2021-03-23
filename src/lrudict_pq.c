@@ -25,8 +25,7 @@ lrupq_new(void)
     PyObject *new_list;
 
     if ((q = PyMem_Malloc(sizeof(LRUDict_pq))) == NULL) {
-        PyErr_NoMemory();
-        return NULL;
+        return (LRUDict_pq *)PyErr_NoMemory();
     }
 
     if ((new_list = PyList_New(0)) == NULL) {
@@ -36,7 +35,7 @@ lrupq_new(void)
 
     q->lst = new_list;
     q->sinfo.head = q->sinfo.tail = 0;
-    q->n_max = (LRUPQ_N_MAX_DEFAULT);
+    q->n_max = LRUPQ_N_MAX_DEFAULT;
     q->n_active = 0;
     return q;
 }
@@ -104,17 +103,7 @@ lrupq_purge(LRUDict_pq *q, PyObject *callback)
         return 0;
     }
 
-    /* Skip if too many pending.
-     * Notice that, on the one hand, a larger limit increases the possibility
-     * of hitting recursion limit with a misbehaving callback (a good thing),
-     * but also the chance of convoy effect on the GIL if multiple threads
-     * requests GIL release and re-acquisition in the (pending) callback. OTOH,
-     * a lower value makes the queue more likely to have stuck items (by not
-     * being purged as aggressively), and (somewhat counterintuitively) a
-     * runaway callback less likely to be stopped by the recursion limit
-     * (because the new calls return early). However, it prevents threads from
-     * thrashing heavily upon each other.
-     */
+    /* Skip if too many pending. */
     if (q->n_active >= q->n_max) {
         return 0;
     }
