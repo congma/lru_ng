@@ -450,17 +450,6 @@ LRU_contains(LRUDict *self, PyObject *key)
 }
 
 
-static PyObject *
-LRU_has_key_legacy(LRUDict *self, PyObject *args)
-{
-    PyObject *key;
-    if (!PyArg_ParseTuple(args, "O:has_key", &key)) {
-        return NULL;
-    }
-    return LRU_contains(self, key);
-}
-
-
 /* Mapping interface (__getitem__, __setitem__, __delitem__ will wrap around
  * them) */
 /* Some building blocks below. lru_hit_impl always return new reference of
@@ -1484,7 +1473,7 @@ static PyMethodDef LRU_methods[] = {
         (PyCFunction)LRU_items, METH_NOARGS,
         PyDoc_STR("items(self, /)\n--\n\n-> List[Tuple[Object, Object]]\nReturn a list of (key, value) pairs in MRU order.")},
     {"has_key",
-        (PyCFunction)LRU_has_key_legacy, METH_VARARGS,
+        (PyCFunction)LRU_contains, METH_O,
         PyDoc_STR("has_key(self, key, /)\n--\n\n-> Bool\nCheck if key is in the LRUDict.\n*Deprecated:* Use the ``in`` operator instead.")},
     {"get",
         (PyCFunction)LRU_get, METH_VARARGS,
