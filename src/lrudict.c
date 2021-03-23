@@ -1202,28 +1202,38 @@ LRU_popitem(LRUDict *self, PyObject *args)
     LRU_ENTER_CRIT(self, NULL);
 
     node = pop_least_recent ? LAST_NODE(self) : FIRST_NODE(self);
-    /* item_to_pop is new reference if not NULL */
-    item_to_pop = IS_VALID_NODE_IN(self, node) ? lru_tuplify_node(node) : NULL;
-    if (item_to_pop == NULL) {
-        PyErr_SetString(PyExc_KeyError, "popitem(): LRUDict is empty");
+
+    if (IS_VALID_NODE_IN(self, node)) {  /* Not empty */
+        item_to_pop = lru_tuplify_node(node);
+
+        if (unlikely(item_to_pop == NULL)) {
+            /* But getting new tuple failed; do nothing to dict and fail. */
+            LRU_LEAVE_CRIT(self);
+            return NULL;
+        }
+
+        Py_INCREF(node);
+        if (_PyDict_DelItem_KnownHash(self->dict,
+                                      node->pl.key, node->pl.key_hash) == 0)
+        {
+            lru_detach_node(node);
+        }
+        else { /* Somehow fails to delete from dict. */
+            /* item_to_pop is now useless and must be destroyed */
+            Py_DECREF(item_to_pop);
+            item_to_pop = NULL;
+        }
+        LRU_LEAVE_CRIT(self);
+        Py_DECREF(node);
+
+        return item_to_pop;
+    }
+    else {  /* Empty */
+        PyErr_SetString(PyExc_KeyError,
+                        "popitem(): LRUDict instance is empty");
         LRU_LEAVE_CRIT(self);
         return NULL;
     }
-
-    Py_INCREF(node);
-    if (_PyDict_DelItem_KnownHash(self->dict,
-                                  node->pl.key, node->pl.key_hash) == 0)
-    {
-        lru_detach_node(node);
-    }
-    else {
-        /* Somehow fails to delete from dict, item_to_pop becomes useless */
-        Py_CLEAR(item_to_pop);
-    }
-    LRU_LEAVE_CRIT(self);
-    Py_DECREF(node);
-
-    return item_to_pop;
 }
 
 
