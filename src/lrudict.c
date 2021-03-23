@@ -1747,18 +1747,22 @@ LRU_fini(LRUDict *self)
 static int
 LRU_traverse(LRUDict *self, visitproc visit, void *arg)
 {
-    Node *cur = FIRST_NODE(self);
+    PyObject *key;
+    Node *cur;
+    Py_ssize_t pos = 0;
 
-    while (IS_VALID_NODE_IN(self, cur)) {
-        Py_VISIT(cur->pl.key);
+    while(PyDict_Next(self->dict, &pos, &key, (PyObject **)&cur)) {
+        Py_VISIT(key);
+        if (cur->pl.key != key) {
+            Py_VISIT(cur->pl.key);
+        }
         Py_VISIT(cur->pl.value);
-        cur = cur->next;
     }
 
     if (self->purge_queue && self->purge_queue->lst) {
         Py_ssize_t len = PyList_Size(self->purge_queue->lst);
-        for (Py_ssize_t i = 0; i < len; i++) {
-            cur = (Node *)PyList_GET_ITEM(self->purge_queue->lst, i);
+        for (pos = 0; pos < len; pos++) {
+            Node *cur = (Node *)PyList_GET_ITEM(self->purge_queue->lst, pos);
             if (cur) {
                 Py_VISIT(cur->pl.key);
                 Py_VISIT(cur->pl.value);
